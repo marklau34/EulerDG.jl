@@ -11,7 +11,7 @@ Version 1 delivers a converged, steady, subsonic 2D airfoil solution from a P1 m
 | Equations | 2D compressible Euler, steady only, subsonic (local Mach < 1) |
 | Discretization | Modal DG, P = 1 on every element |
 | Geometry | Existing SDF library; one straight wall segment per cut fragment |
-| Background mesh | Static Cartesian grid, tensor-product stretched; no AMR |
+| Background mesh | Static uniform Cartesian grid (CartesianMeshes' `CartesianGrid`); stretching deferred (Oct 8); no AMR |
 | Small cells | Local time stepping only; no state redistribution, no merging |
 | Runtime | Julia, CPU, FP64 (assumed; see Open decisions) |
 
@@ -74,7 +74,7 @@ The preprocessor's job is to hand the solver a watertight polygon mesh; the exis
 | Object | Fields |
 | --- | --- |
 | Element | Polygon vertices, area, centroid, bounding box, volume fraction, parent background cell |
-| Face | Endpoints, length, unit normal, left and right element ids, kind (interior, wall, farfield) |
+| Face | Endpoints, length, unit normal, left and right element ids, boundary name (none on interior faces; for example wall, farfield) |
 | Report | Counts by cell type, minimum volume fraction, volume-fraction histogram, closure error, lost-feature flags |
 
 ### Rules
@@ -170,14 +170,14 @@ Phases 1 and 2 are independent and can run in parallel. The circle comes before 
 
 ### Phase 0 · Scaffolding
 
-- [ ] Create the package with modules for geometry, cut mesh, mesh types, basis, quadrature, equations, semidiscretization, pseudo-time and postprocessing
-- [ ] Define the PolygonMesh element and face types from the output contract
-- [ ] Settle the Trixi.jl dependency question
-- [ ] Set up the test harness and a run-configuration format
+- [x] Create the package with modules for geometry, cut mesh, mesh types, basis, quadrature, equations, semidiscretization, pseudo-time and postprocessing
+- [x] Define the PolygonMesh element and face types from the output contract
+- [x] Settle the Trixi.jl dependency question: copy its equation and flux functions (Oct 8)
+- [x] Set up the test harness (the run-configuration format moved to Phase 4 on Oct 8)
 
 ### Phase 1 · DG core on uncut grids
 
-- [ ] Build a PolygonMesh straight from an uncut grid: periodic, uniform and stretched
+- [ ] Build a PolygonMesh straight from an uncut grid: periodic and uniform (stretching deferred on Oct 8)
 - [ ] Basis construction, with a unit test that the mass matrix equals |K| times the identity
 - [ ] Quadrature: segment Gauss, triangle rule, ear clipping, with exactness tests on polygons
 - [ ] Right-hand side with volume, interface and boundary passes and the Rusanov flux
@@ -202,6 +202,7 @@ Phases 1 and 2 are independent and can run in parallel. The circle comes before 
 
 ### Phase 4 · 2D inviscid circle
 
+- [ ] Run-configuration format, moved from Phase 0 (Oct 8); the grid-shift sweep is its first user
 - [ ] Characteristic farfield boundary
 - [ ] Convergence monitors: L2 and maximum residual with its location
 - [ ] Subsonic inviscid circle at M = 0.3, below the circle's critical Mach number
@@ -234,13 +235,13 @@ Backlog after version 1: quadtree refinement, curved cut faces, a two-segment tr
 
 ## Open decisions
 
-Eight choices are still open; the recommendation for each is the default if nothing else is decided.
+Eight choices were open; two were settled on Oct 8 and are marked as decided. The recommendation for each open one is the default if nothing else is decided.
 
 | Decision | Recommendation | Needed by |
 | --- | --- | --- |
 | Runtime: CPU FP64 only, or GPU kernels from the start | CPU FP64 first; face-loop layout kept GPU-friendly | Phase 0 |
-| Trixi.jl as a dependency, or copy its equation and flux functions | Depend on it if the load time is acceptable | Phase 0 |
-| Version 1 background mesh: stretched tensor-product, or quadtree | Stretched tensor-product; quadtree later costs only preprocessor work | Phase 2 |
+| Trixi.jl as a dependency, or copy its equation and flux functions | **Decided (Oct 8): copy.** Trixi 0.17.13 adds 2.5 s to every load and a 228-package tree, for about eight functions | Phase 0 |
+| Version 1 background mesh: stretched tensor-product, or quadtree | **Decided (Oct 8): uniform for now**, the only grid CartesianMeshes and CutCellMethods handle. Revisit before Phase 5, whose farfield at 50–100 chords needs stretching | Phase 2 |
 | Production flux: HLLC or Roe | HLLC; keep Rusanov for debugging | Phase 3 |
 | Is the P0 fallback acceptable, given state redistribution was ruled out | Yes, as an off-by-default safeguard | Phase 4 |
 | Trailing-edge tip: accept truncation, or two-segment wedge | Accept truncation in version 1 and report it | Phase 5 |

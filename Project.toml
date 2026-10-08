@@ -3,7 +3,17 @@ uuid = "4b9a1561-1bdc-4288-bb30-1dac574ff254"
 version = "0.1.0"
 authors = ["Mark Lau <mark@tidalflight.com>"]
 
+[deps]
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+StructArrays = "09ab397b-f2b6-538f-b94a-2f83cf4a842a"
+WriteVTK = "64499a7a-5c06-52f2-abe2-ccb03c286192"
+
 [compat]
+Printf = "1"
+StaticArrays = "1.9.22"
+StructArrays = "0.7.3"
+WriteVTK = "1.22.0"
 julia = "1.11"
 
 [extras]
