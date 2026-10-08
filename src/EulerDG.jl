@@ -17,8 +17,8 @@ downstream of it:
   [`PseudoTime`](@ref EulerDG.PseudoTime) and [`Post`](@ref EulerDG.Post).
 
 Nothing downstream ever sees a Cartesian index; a test scans the sources to keep it that way. The
-development plan is in `Cut-Cell DG Euler Solver — Architecture & Development Plan.md`, with one
-implementation brief per phase in `briefs/`.
+development plan is in `Cut-Cell DG Euler Solver — Architecture & Development Plan.md`, with
+implementation briefs in `briefs/` and notes on each completed phase in `dev-notes/`.
 """
 module EulerDG
 
@@ -41,6 +41,14 @@ include("Semidiscretization/Semidiscretization.jl")
 include("PseudoTime/PseudoTime.jl")
 include("Post/Post.jl")
 
+using .CutMesh
+using .Quadrature
+using .Basis
+using .Equations
+using .Semidiscretization
+using .PseudoTime
+using .Post
+
 # Common layer: the mesh contract
 export MeshElement, MeshFace, PolygonMesh
 export nelements, nfaces, npoints, nboundaries, element_nodes, element_faces
@@ -49,8 +57,19 @@ export polygon_area, polygon_centroid, polygon_bounds, face_vector
 export MESH_INVARIANTS, check_mesh, assert_mesh
 export VF_BINS, mesh_summary, mesh_report, write_mesh_vtk
 
-# The submodules export nothing yet. They fill in from Phase 1 on and are reached as
-# `EulerDG.Basis` and so on; their names are not exported, because `Geometry` would collide with
-# Meshes.jl's.
+# Submodules and their API. The submodule names themselves are not exported, because `Geometry`
+# would collide with Meshes.jl's; reach them as `EulerDG.Basis` and so on.
+export uncut_mesh
+export GAUSS2, GAUSS3, TRIANGLE3, TRIANGLE6, triangulate, polygon_rule
+export ElementBasis, element_basis, basis_values, basis_gradients, mass_matrix
+export AbstractEquations, AbstractCompressibleEulerEquations, CompressibleEulerEquations2D
+export nvariables, prim2cons, cons2prim, density, velocity, pressure
+export flux, flux_central, FluxPlusDissipation, DissipationLocalLaxFriedrichs, FluxLaxFriedrichs
+export flux_lax_friedrichs, max_abs_speed, max_abs_speed_naive, max_abs_speeds
+export BoundaryConditionDirichlet, freestream, IsentropicVortex
+export DGSemidiscretization, allocate_state, project, evaluate, cell_average, rhs!, max_dt
+export assert_positive
+export SSPRK3Cache, ssprk3_step!, integrate!
+export l2_error, write_solution_vtk
 
 end # module EulerDG

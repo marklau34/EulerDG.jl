@@ -1,1 +1,3 @@
 out/
+# The Trixi cross-check environment pins Trixi by compat; its 300-package manifest stays local.
+dev/Manifest.toml

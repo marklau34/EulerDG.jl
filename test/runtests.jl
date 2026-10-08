@@ -1,10 +1,12 @@
 using EulerDG
+using CartesianMeshes: CartesianMeshes, CartesianGrid
+using Printf: @printf, @sprintf
 using StaticArrays: SVector
 using Test
 
 # The test tier: `commit` runs on every commit; `scheduled` (nightly or on demand) adds the gate
-# sweeps of every completed phase, from Phase 1 on. Pick it with `Pkg.test(test_args=["scheduled"])`
-# or the EULERDG_TEST_TIER environment variable.
+# sweeps of every completed phase. Pick it with `Pkg.test(test_args=["scheduled"])` or the
+# EULERDG_TEST_TIER environment variable.
 const TIER = isempty(ARGS) ? get(ENV, "EULERDG_TEST_TIER", "commit") : first(ARGS)
 TIER in ("commit", "scheduled") || error("unknown test tier \"$TIER\"; use commit or scheduled")
 
@@ -16,7 +18,13 @@ include("fixtures.jl")
     include("test_summary.jl")
     include("test_vtk.jl")
     include("test_layering.jl")
+    include("test_uncut.jl")
+    include("test_quadrature.jl")
+    include("test_basis.jl")
+    include("test_equations.jl")
+    include("test_semidiscretization.jl")
+    include("test_post.jl")
     if TIER == "scheduled"
-        # Phase gates join here from Phase 1 on, as scheduled/test_phaseN_gate.jl.
+        include("scheduled/test_phase1_gate.jl")
     end
 end

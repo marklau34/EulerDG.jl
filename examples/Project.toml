@@ -1,0 +1,7 @@
+[deps]
+CartesianMeshes = "357f21b8-02af-4872-bdb4-87c05a034e47"
+EulerDG = "4b9a1561-1bdc-4288-bb30-1dac574ff254"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+
+[sources]
+EulerDG = {path = ".."}

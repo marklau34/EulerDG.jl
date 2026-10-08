@@ -4,12 +4,16 @@ version = "0.1.0"
 authors = ["Mark Lau <mark@tidalflight.com>"]
 
 [deps]
+CartesianMeshes = "357f21b8-02af-4872-bdb4-87c05a034e47"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 StructArrays = "09ab397b-f2b6-538f-b94a-2f83cf4a842a"
 WriteVTK = "64499a7a-5c06-52f2-abe2-ccb03c286192"
 
 [compat]
+CartesianMeshes = "0.2.3"
+LinearAlgebra = "1"
 Printf = "1"
 StaticArrays = "1.9.22"
 StructArrays = "0.7.3"

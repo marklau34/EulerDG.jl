@@ -92,6 +92,12 @@ fixtures() = (; two_triangles=two_triangles(), hanging_node=hanging_node(),
 # =====================================
 # Helpers
 
+# One Dirichlet freestream condition on every boundary of `m`.
+function freestream_conditions(m, uinf)
+    bc = BoundaryConditionDirichlet((x, t, eq) -> uinf)
+    return NamedTuple{Tuple(m.boundary_names)}(ntuple(_ -> bc, nboundaries(m)))
+end
+
 # A plain shoelace sum in absolute coordinates, in the points' own precision.
 function naive_area(pts)
     n = length(pts)

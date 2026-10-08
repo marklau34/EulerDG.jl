@@ -177,12 +177,14 @@ Phases 1 and 2 are independent and can run in parallel. The circle comes before 
 
 ### Phase 1 · DG core on uncut grids
 
-- [ ] Build a PolygonMesh straight from an uncut grid: periodic and uniform (stretching deferred on Oct 8)
-- [ ] Basis construction, with a unit test that the mass matrix equals |K| times the identity
-- [ ] Quadrature: segment Gauss, triangle rule, ear clipping, with exactness tests on polygons
-- [ ] Right-hand side with volume, interface and boundary passes and the Rusanov flux
-- [ ] SSP-RK3 with a global step for the unsteady vortex test
-- [ ] Isentropic vortex convergence study and freestream preservation test
+- [x] Build a PolygonMesh straight from an uncut grid: periodic and uniform (stretching deferred on Oct 8)
+- [x] Basis construction, with a unit test that the mass matrix equals |K| times the identity
+- [x] Quadrature: segment Gauss, triangle rule, ear clipping, with exactness tests on polygons
+- [x] Right-hand side with volume, interface and boundary passes and the Rusanov flux
+- [x] SSP-RK3 with a global step for the unsteady vortex test
+- [x] Isentropic vortex convergence study and freestream preservation test
+
+**Gate passed (Oct 8).** The L2 density error falls at orders 2.08–2.21 on square cells and 2.15–2.19 with dx = 2dy. Freestream stays uniform to 1e-14 through t = 5, cut fixtures included.
 
 ### Phase 2 · Cut-mesh preprocessor
 

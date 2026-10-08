@@ -7,14 +7,21 @@
 """
     EulerDG.Quadrature
 
-Integration rules on element polygons and faces. Planned API, from Phase 1:
+Integration rules on element polygons and faces.
 
-- 2-point Gauss on each straight face;
-- a 3-point degree-2 rule per triangle, with a 6-point rule for over-integration as a switch;
-- ear-clipping triangulation of element polygons, nonconvex ones included;
-- a tensor 2 x 2 Gauss rule for full cells, through the same kernel as cut cells;
-- exactness tests on polygons.
+- [`GAUSS2`](@ref), [`GAUSS3`](@ref): Gauss-Legendre on [0, 1]. `GAUSS2` is the face rule.
+- [`TRIANGLE3`](@ref), [`TRIANGLE6`](@ref): symmetric triangle rules of degrees 2 and 4.
+- [`triangulate`](@ref): ear clipping of element polygons, nonconvex ones included.
+- [`polygon_rule`](@ref): the element rule. Full cells get the tensor Gauss rule; other polygons
+  are triangulated, with the degree-4 rule as the over-integration switch.
 """
 module Quadrature
+
+using StaticArrays: SVector
+
+include("rules.jl")
+include("polygon.jl")
+
+export GAUSS2, GAUSS3, TRIANGLE3, TRIANGLE6, triangulate, polygon_rule
 
 end # module Quadrature
