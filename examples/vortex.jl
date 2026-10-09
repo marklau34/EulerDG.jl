@@ -1,10 +1,10 @@
 # =====================================
 # The isentropic vortex: a convergence study of the P1 DG core on uniform periodic grids
 #
-# Run with `julia --project=examples examples/vortex.jl [n ...]`, for example
-# `julia --project=examples examples/vortex.jl 16 32 64 128`. For each n it marches the vortex on
-# an n x n periodic grid over [-5, 5]^2 to t = 1, and prints the L2 density error and the observed
-# order. The finest solution's cell averages go to out/vortex/ for ParaView.
+# Run with `julia --project=examples -t auto examples/vortex.jl [n ...]`, for example
+# `julia --project=examples -t auto examples/vortex.jl 16 32 64 128`. For each n it marches the
+# vortex on an n x n periodic grid over [-5, 5]^2 to t = 1, and prints the L2 density error and the
+# observed order. The finest solution's cell averages go to out/vortex/ for ParaView.
 
 using EulerDG
 using CartesianMeshes: CartesianGrid

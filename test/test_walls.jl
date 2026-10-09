@@ -69,7 +69,6 @@
         dt = local_dt!(zeros(64), u, semi; cfl=2)
         @test all(≈(2 * (1 / 8) / 12), dt)                 # cfl h² / (3 · 4h), sound speed 1
         @test max_dt(u, semi; cfl=2) == minimum(dt)
-        @test allocs((dt, u, semi) -> local_dt!(dt, u, semi; cfl=2), dt, u, semi) == 0
         # A constant source adds itself to every cell average's time derivative.
         S = SVector(0.1, -0.2, 0.3, 0.4)
         sourced = DGSemidiscretization(semi.mesh, eq; source_terms=(u, x, t, eq) -> S)

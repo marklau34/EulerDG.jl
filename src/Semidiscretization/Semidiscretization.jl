@@ -22,14 +22,19 @@ The weak-form modal DG right-hand side, P1 on every element.
 - [`DGSemidiscretization`](@ref): element and face solver data built from a mesh, with the
   equations, the surface flux, one boundary condition per named boundary and optional source
   terms.
-- [`rhs!`](@ref) in four passes: element volume integrals (and sources), interior faces, boundary
-  faces (one type-stable loop per boundary), then division by |K|.
+- [`rhs!`](@ref) in two threaded passes: the flux at every face Gauss point, then each
+  element's volume integrals, sources and face integrals, divided by |K|.
 - [`allocate_state`](@ref), [`project`](@ref), [`evaluate`](@ref), [`cell_average`](@ref).
 - The plan's step formula: [`local_dt!`](@ref), each element's own step (Phase 3), and
   [`max_dt`](@ref), the smallest of them. [`assert_positive`](@ref) checks the state.
+
+The loops over faces and elements are KernelAbstractions kernels, threaded on the CPU backend. No
+two threads ever write to the same element, and each element's sums run in the order of a serial
+loop over its faces, so the results do not depend on the number of threads.
 """
 module Semidiscretization
 
+using KernelAbstractions: @index, @kernel, CPU
 using StaticArrays: SMatrix, SVector
 using ..EulerDG: PolygonMesh, nelements, nfaces, element_nodes, interior_faces, boundary_faces
 using ..Quadrature: GAUSS2, polygon_rule
@@ -40,7 +45,7 @@ export DGSemidiscretization, allocate_state, project, evaluate, cell_average, rh
 export local_dt!, assert_positive, face_trace
 
 """
-    DGSemidiscretization{T,M,EQ,SF,BC}
+    DGSemidiscretization{T,M,EQ,SF,BC,ST,B}
 
 The P1 DG discretization of `equations` on a `PolygonMesh`, as struct-of-arrays:
 
@@ -49,33 +54,47 @@ The P1 DG discretization of `equations` on a `PolygonMesh`, as struct-of-arrays:
 - per volume quadrature point, in CSR order by element (`qptr`): position, weight and mode values;
 - per face, at its two Gauss points on the left copy: position, weight times face vector, and the
   mode values of the left and right elements (the right ones at the point moved by the face's
-  periodic shift).
+  periodic shift);
+- per element, in the mesh's `elem_ptr` layout: its faces in increasing order (`sides`), as `+f`
+  where it is face `f`'s left element and `-f` where it is the right one.
+
+It also holds the kernels' work buffers: the face fluxes, the face and element wave speeds, and
+the positivity flags. Two solves at once need two semidiscretizations.
 
 Build it with `DGSemidiscretization(mesh, equations; ...)`.
 """
-struct DGSemidiscretization{T,M<:PolygonMesh{T},EQ,SF,BC,ST}
-    mesh::M
-    equations::EQ
-    surface_flux::SF
-    boundary_conditions::BC
-    source_terms::ST
-    basis::Vector{ElementBasis{T}}
-    gradients::Vector{SMatrix{2,3,T,6}}
-    mass::Vector{T}
-    qptr::Vector{Int32}
-    qpoint::Vector{SVector{2,T}}
-    qweight::Vector{T}
-    qphi::Vector{SVector{3,T}}
-    fpoint::Vector{NTuple{2,SVector{2,T}}}
-    fnormal::Vector{NTuple{2,SVector{2,T}}}
-    fphi_left::Vector{NTuple{2,SVector{3,T}}}
-    fphi_right::Vector{NTuple{2,SVector{3,T}}}
-    speed::Vector{T}
+mutable struct DGSemidiscretization{T,M<:PolygonMesh{T},EQ,SF,BC,ST,B}
+    # Mutable, with every field constant, so that a kernel launch passes it by reference: the CPU
+    # backend boxes its launch arguments, and boxing a large immutable struct copies it each time.
+    const mesh::M
+    const equations::EQ
+    const surface_flux::SF
+    const boundary_conditions::BC
+    const source_terms::ST
+    const backend::B
+    const grainsize::Int
+    const basis::Vector{ElementBasis{T}}
+    const gradients::Vector{SMatrix{2,3,T,6}}
+    const mass::Vector{T}
+    const qptr::Vector{Int32}
+    const qpoint::Vector{SVector{2,T}}
+    const qweight::Vector{T}
+    const qphi::Vector{SVector{3,T}}
+    const fpoint::Vector{NTuple{2,SVector{2,T}}}
+    const fnormal::Vector{NTuple{2,SVector{2,T}}}
+    const fphi_left::Vector{NTuple{2,SVector{3,T}}}
+    const fphi_right::Vector{NTuple{2,SVector{3,T}}}
+    const sides::Vector{Int32}
+    const fhat::Vector{NTuple{2,SVector{4,T}}}
+    const fspeed::Vector{T}
+    const speed::Vector{T}
+    const positivity::Vector{Int32}
 end
 
 """
     DGSemidiscretization(mesh, equations; surface_flux=flux_lax_friedrichs,
-                         boundary_conditions=(;), source_terms=nothing, volume_degree=2)
+                         boundary_conditions=(;), source_terms=nothing, volume_degree=2,
+                         backend=CPU(), grainsize=64)
 
 Build the discretization.
 
@@ -85,10 +104,20 @@ Build the discretization.
   volume quadrature point, and added to the right-hand side. A manufactured solution enters this
   way.
 - `volume_degree` is the degree of the element rules: 2 by default, 4 to over-integrate.
+- `backend` is the KernelAbstractions backend the kernels run on. Only `CPU()` for now, since the
+  solver data are host arrays. It uses all of Julia's threads (`julia -t`).
+- `grainsize` is the fewest elements or faces a thread takes in one kernel launch. A launch over
+  at most `grainsize` of them runs on the calling thread without spawning tasks, and
+  `typemax(Int)` runs everything serially. The results are the same either way.
+
+Boundary conditions and source terms are called from many threads at once, so they must not
+mutate shared state.
 """
 function DGSemidiscretization(mesh::PolygonMesh{T}, equations; surface_flux=flux_lax_friedrichs,
                               boundary_conditions::NamedTuple=(;), source_terms=nothing,
-                              volume_degree::Integer=2) where {T}
+                              volume_degree::Integer=2, backend=CPU(),
+                              grainsize::Integer=64) where {T}
+    grainsize >= 1 || throw(ArgumentError("grainsize must be at least 1, not $grainsize"))
     names = mesh.boundary_names
     for name in names
         haskey(boundary_conditions, name) ||
@@ -145,10 +174,20 @@ function DGSemidiscretization(mesh::PolygonMesh{T}, equations; surface_flux=flux
         fphi_right[f] = R == 0 ? (zero(SVector{3,T}), zero(SVector{3,T})) :
                         face_values(basis[R], (pa - basis[R].center) + F.shift[f], d)
     end
-    return DGSemidiscretization(mesh, equations, surface_flux, bcs, source_terms, basis,
-                                [basis_gradients(b) for b in basis], [b.mass for b in basis],
-                                qptr, qpoint, qweight, qphi, fpoint, fnormal, fphi_left,
-                                fphi_right, zeros(T, ne))
+
+    # Each element's faces in increasing order, the order in which a serial loop over the faces
+    # reaches them, signed by side.
+    sides = Vector{Int32}(undef, length(mesh.elem_faces))
+    for e in 1:ne
+        r = Int(mesh.elem_ptr[e]):(Int(mesh.elem_ptr[e + 1]) - 1)
+        sides[r] = sort!([F.left[f] == e ? f : -f for f in mesh.elem_faces[r]]; by=abs)
+    end
+    return DGSemidiscretization(mesh, equations, surface_flux, bcs, source_terms, backend,
+                                Int(grainsize), basis, [basis_gradients(b) for b in basis],
+                                [b.mass for b in basis], qptr, qpoint, qweight, qphi, fpoint,
+                                fnormal, fphi_left, fphi_right, sides,
+                                Vector{NTuple{2,SVector{4,T}}}(undef, nf), zeros(T, nf),
+                                zeros(T, ne), zeros(Int32, ne))
 end
 
 function Base.show(io::IO, s::DGSemidiscretization)
@@ -224,30 +263,94 @@ function project(f, semi::DGSemidiscretization{T}, t=zero(T); degree::Integer=4)
 end
 
 # =====================================
+# Kernel launches
+
+# Run `kernel` over the items 1:n, on the semidiscretization's backend. The CPU backend hands each
+# thread a contiguous run of whole workgroups, 1024 items each by default, which would leave most
+# threads idle on a mesh of a few thousand elements. So the workgroups split the items evenly over
+# the threads, but hold at least `grainsize` items: a launch over at most `grainsize` items runs on
+# the calling thread. The size is capped at `n`, since the backend steps through every slot of a
+# workgroup.
+@inline function _launch!(kernel::K, semi::DGSemidiscretization, n,
+                          args::Vararg{Any,N}) where {K,N}
+    n > 0 || return nothing
+    ws = min(n, max(semi.grainsize, cld(n, Threads.nthreads())))
+    kernel(semi.backend)(args...; ndrange=n, workgroupsize=ws)
+    return nothing
+end
+
+# =====================================
 # The right-hand side
+#
+# Two kernels, so that no two threads ever add into the same element. The face kernel evaluates F̂
+# once at each face Gauss point, into `semi.fhat`. The element kernel then sums each element's
+# volume integral, source terms and face integrals, taking its faces in increasing order: the order
+# of a serial loop over the faces, which scattered into both neighbours.
 
 """
     rhs!(du, u, semi, t) -> du
 
-The DG time derivative of the state `u` at time `t`: element volume integrals and source terms,
-then interior faces, then boundary faces, then division by each element's mass. Allocation-free.
+The DG time derivative of the state `u` at time `t`: the flux at every face Gauss point, then
+each element's volume integrals, source terms and face integrals, divided by its mass. Threaded
+over faces and then elements, with the same result on any number of threads. The kernels are
+allocation-free; each launch allocates KernelAbstractions' bookkeeping, about 150 bytes, plus its
+tasks when threaded.
 """
 function rhs!(du::AbstractArray{T,3}, u::AbstractArray{T,3}, semi::DGSemidiscretization{T},
               t) where {T}
-    fill!(du, zero(T))
-    _volume_integrals!(du, u, semi)
-    _source_terms!(du, u, semi, t, semi.source_terms)
-    _interior_faces!(du, u, semi)
-    _boundary_passes!(du, u, semi, t, semi.boundary_conditions, 1)
-    _inverse_mass!(du, semi)
+    _launch!(_face_flux_kernel!, semi, nfaces(semi.mesh), semi, u, t)
+    _launch!(_element_rhs_kernel!, semi, nelements(semi.mesh), du, u, semi, t)
     return du
 end
 
-# ∫ ∇φ_i · F(U): the gradients are constant, so sum the weighted x and y fluxes first. Mode 1 has
-# no gradient.
-function _volume_integrals!(du, u, semi::DGSemidiscretization{T}) where {T}
+@kernel function _face_flux_kernel!(semi, u, t)
+    f = @index(Global, Linear)
+    @inbounds semi.fhat[f] = _face_flux(u, semi, t, f)
+end
+
+@kernel function _element_rhs_kernel!(du, u, semi, t)
+    e = @index(Global, Linear)
+    _element_rhs!(du, u, semi, t, e)
+end
+
+# F̂ at face `f`'s two Gauss points: the surface flux between the two traces on an interior face,
+# and the boundary's condition on a boundary face.
+@inline function _face_flux(u, semi::DGSemidiscretization, t, f)
+    eq, sf, F = semi.equations, semi.surface_flux, semi.mesh.faces
+    @inbounds begin
+        L, k = F.left[f], F.boundary[f]
+        φL, n = semi.fphi_left[f], semi.fnormal[f]
+        if k == 0
+            R, φR = F.right[f], semi.fphi_right[f]
+            return (sf(_value(u, L, φL[1]), _value(u, R, φR[1]), n[1], eq),
+                    sf(_value(u, L, φL[2]), _value(u, R, φR[2]), n[2], eq))
+        else
+            x, bcs = semi.fpoint[f], semi.boundary_conditions
+            return (_boundary_flux(bcs, k, _value(u, L, φL[1]), n[1], x[1], t, sf, eq),
+                    _boundary_flux(bcs, k, _value(u, L, φL[2]), n[2], x[2], t, sf, eq))
+        end
+    end
+end
+
+# Boundary `k`'s condition, picked from the tuple by unrolled recursion, so the call is type-stable
+# whatever the mix of conditions.
+@inline _boundary_flux(::Tuple{}, k, u, n, x, t, sf, eq) = _no_boundary()
+@inline function _boundary_flux(bcs::Tuple, k, u, n, x, t, sf, eq)
+    k == 1 && return first(bcs)(u, n, x, t, sf, eq)
+    return _boundary_flux(Base.tail(bcs), k - 1, u, n, x, t, sf, eq)
+end
+
+@noinline _no_boundary() = throw(ArgumentError("no boundary condition for a face's boundary"))
+
+# Element `e`'s rows of the right-hand side, into `du`:
+#
+#     ( ∫ ∇φ_i · F(U) + ∫ φ_i S - ∮ φ_i F̂ ) / |K|
+#
+# The gradients are constant, so the weighted x and y fluxes are summed first; mode 1 has no
+# gradient. The face fluxes come from `semi.fhat`.
+@inline function _element_rhs!(du, u, semi::DGSemidiscretization{T}, t, e) where {T}
     eq = semi.equations
-    @inbounds for e in eachindex(semi.mass)
+    @inbounds begin
         Fx = Fy = zero(SVector{4,T})
         for q in semi.qptr[e]:(semi.qptr[e + 1] - 1)
             U = _value(u, e, semi.qphi[q])
@@ -256,73 +359,37 @@ function _volume_integrals!(du, u, semi::DGSemidiscretization{T}) where {T}
             Fy += w * flux(U, 2, eq)
         end
         g = semi.gradients[e]
-        _add!(du, 2, e, g[1, 2] * Fx + g[2, 2] * Fy)
-        _add!(du, 3, e, g[1, 3] * Fx + g[2, 3] * Fy)
-    end
-    return nothing
-end
-
-# ∫ φ_i S(U, x, t): the source terms, at the volume quadrature points; none by default.
-@inline _source_terms!(du, u, semi::DGSemidiscretization, t, ::Nothing) = nothing
-function _source_terms!(du, u, semi::DGSemidiscretization, t, source)
-    eq = semi.equations
-    @inbounds for e in eachindex(semi.mass), q in semi.qptr[e]:(semi.qptr[e + 1] - 1)
-        φ = semi.qphi[q]
-        S = semi.qweight[q] * source(_value(u, e, φ), semi.qpoint[q], t, eq)
-        for i in 1:3
-            _add!(du, i, e, φ[i] * S)
-        end
-    end
-    return nothing
-end
-
-# -∮ φ_i F̂ on interior faces: each face flux is computed once and scattered to both sides.
-function _interior_faces!(du, u, semi::DGSemidiscretization)
-    eq, F = semi.equations, semi.mesh.faces
-    @inbounds for f in interior_faces(semi.mesh)
-        L, R = F.left[f], F.right[f]
-        φL, φR, n = semi.fphi_left[f], semi.fphi_right[f], semi.fnormal[f]
-        for q in 1:2
-            Fhat = semi.surface_flux(_value(u, L, φL[q]), _value(u, R, φR[q]), n[q], eq)
-            for i in 1:3
-                _add!(du, i, L, -φL[q][i] * Fhat)
-                _add!(du, i, R, φR[q][i] * Fhat)
+        r = zero(SMatrix{4,3,T,12}) +
+            hcat(zero(SVector{4,T}), g[1, 2] * Fx + g[2, 2] * Fy, g[1, 3] * Fx + g[2, 3] * Fy)
+        r = _element_sources(r, u, semi, t, e, semi.source_terms)
+        for j in semi.mesh.elem_ptr[e]:(semi.mesh.elem_ptr[e + 1] - 1)
+            f = semi.sides[j]
+            if f > 0
+                φ, Fhat = semi.fphi_left[f], semi.fhat[f]
+                r = r - Fhat[1] * φ[1]' - Fhat[2] * φ[2]'
+            else
+                φ, Fhat = semi.fphi_right[-f], semi.fhat[-f]
+                r = r + Fhat[1] * φ[1]' + Fhat[2] * φ[2]'
             end
         end
-    end
-    return nothing
-end
-
-# One boundary at a time, so each loop is type-stable for its own condition.
-@inline _boundary_passes!(du, u, semi, t, ::Tuple{}, k) = nothing
-@inline function _boundary_passes!(du, u, semi, t, bcs::Tuple, k)
-    _boundary_pass!(du, u, semi, t, first(bcs), boundary_faces(semi.mesh, k))
-    return _boundary_passes!(du, u, semi, t, Base.tail(bcs), k + 1)
-end
-
-function _boundary_pass!(du, u, semi::DGSemidiscretization, t, bc, faces)
-    eq, F = semi.equations, semi.mesh.faces
-    @inbounds for f in faces
-        L = F.left[f]
-        φL, n, x = semi.fphi_left[f], semi.fnormal[f], semi.fpoint[f]
-        for q in 1:2
-            Fhat = bc(_value(u, L, φL[q]), n[q], x[q], t, semi.surface_flux, eq)
-            for i in 1:3
-                _add!(du, i, L, -φL[q][i] * Fhat)
-            end
-        end
-    end
-    return nothing
-end
-
-function _inverse_mass!(du, semi::DGSemidiscretization)
-    @inbounds for e in eachindex(semi.mass)
         m = inv(semi.mass[e])
         for i in 1:3, k in 1:4
-            du[k, i, e] *= m
+            du[k, i, e] = r[k, i] * m
         end
     end
     return nothing
+end
+
+# + ∫ φ_i S(U, x, t): the source terms, at the volume quadrature points; none by default.
+@inline _element_sources(r, u, semi, t, e, ::Nothing) = r
+@inline function _element_sources(r, u, semi, t, e, source)
+    eq = semi.equations
+    @inbounds for q in semi.qptr[e]:(semi.qptr[e + 1] - 1)
+        φ = semi.qphi[q]
+        S = semi.qweight[q] * source(_value(u, e, φ), semi.qpoint[q], t, eq)
+        r += S * φ'
+    end
+    return r
 end
 
 # =====================================
@@ -330,22 +397,47 @@ end
 
 # Each element's `Σ_f λ_f |f|`, into `semi.speed`, with `λ_f` the largest `|v · n| + c` over the
 # face's Gauss points and both its sides. Boundary faces count too: a thin sliver along a long wall
-# face gets a step that scales with its thickness.
-function _face_speeds!(u, semi::DGSemidiscretization{T}) where {T}
-    speed, F, eq = semi.speed, semi.mesh.faces, semi.equations
-    fill!(speed, zero(T))
-    @inbounds for f in eachindex(semi.fnormal)
-        L, R = F.left[f], F.right[f]
-        λ = zero(T)
-        for q in 1:2
-            UL = _value(u, L, semi.fphi_left[f][q])
-            UR = R == 0 ? UL : _value(u, R, semi.fphi_right[f][q])
-            λ = max(λ, max_abs_speed(UL, UR, F.normal[f], eq))
-        end
-        speed[L] += λ * F.length[f]
-        R == 0 || (speed[R] += λ * F.length[f])
+# face gets a step that scales with its thickness. With a vector `dt`, also each element's step at
+# `cfl`.
+function _face_speeds!(dt, u, semi::DGSemidiscretization; cfl)
+    _launch!(_face_speed_kernel!, semi, nfaces(semi.mesh), semi, u)
+    _launch!(_element_speed_kernel!, semi, nelements(semi.mesh), dt, semi, cfl)
+    return semi.speed
+end
+
+@kernel function _face_speed_kernel!(semi, u)
+    f = @index(Global, Linear)
+    @inbounds semi.fspeed[f] = _face_speed(u, semi, f)
+end
+
+@kernel function _element_speed_kernel!(dt, semi, cfl)
+    e = @index(Global, Linear)
+    _element_speed!(dt, semi, cfl, e)
+end
+
+# `λ_f |f|` for face `f`.
+@inline function _face_speed(u, semi::DGSemidiscretization{T}, f) where {T}
+    F, eq = semi.mesh.faces, semi.equations
+    L, R = @inbounds F.left[f], F.right[f]
+    λ = zero(T)
+    @inbounds for q in 1:2
+        UL = _value(u, L, semi.fphi_left[f][q])
+        UR = R == 0 ? UL : _value(u, R, semi.fphi_right[f][q])
+        λ = max(λ, max_abs_speed(UL, UR, F.normal[f], eq))
     end
-    return speed
+    return @inbounds λ * F.length[f]
+end
+
+@inline function _element_speed!(dt, semi::DGSemidiscretization{T}, cfl, e) where {T}
+    s = zero(T)
+    @inbounds for j in semi.mesh.elem_ptr[e]:(semi.mesh.elem_ptr[e + 1] - 1)
+        s += semi.fspeed[abs(semi.sides[j])]
+    end
+    @inbounds semi.speed[e] = s
+    if dt !== nothing
+        @inbounds dt[e] = cfl * semi.mass[e] / (3 * s)
+    end
+    return nothing
 end
 
 """
@@ -356,13 +448,10 @@ Each element's own step, the plan's local-step formula with p = 1:
     Δt_K = cfl |K| / ((2p + 1) Σ_f λ_f |f|),   λ_f = max over the face's Gauss points and both
                                                sides of |v · n| + c
 
-The face sum includes boundary faces. Allocation-free.
+The face sum includes boundary faces. Threaded over faces and then elements.
 """
 function local_dt!(dt::AbstractVector, u, semi::DGSemidiscretization; cfl)
-    speed = _face_speeds!(u, semi)
-    @inbounds for e in eachindex(speed)
-        dt[e] = cfl * semi.mass[e] / (3 * speed[e])
-    end
+    _face_speeds!(dt, u, semi; cfl)
     return dt
 end
 
@@ -372,7 +461,7 @@ end
 The global time step: the smallest of the elements' [`local_dt!`](@ref) steps.
 """
 function max_dt(u, semi::DGSemidiscretization{T}; cfl) where {T}
-    speed = _face_speeds!(u, semi)
+    speed = _face_speeds!(nothing, u, semi; cfl)
     dt = typemax(T)
     @inbounds for e in eachindex(speed)
         dt = min(dt, semi.mass[e] / (3 * speed[e]))
@@ -384,15 +473,32 @@ end
     assert_positive(u, semi)
 
 Throw a `DomainError` naming the element and the point if the density or the pressure is not
-positive at any volume quadrature point. NaNs fail too.
+positive at any volume quadrature point. NaNs fail too. Threaded over elements; the error names
+the first such element, and its first such point.
 """
 function assert_positive(u, semi::DGSemidiscretization)
+    _launch!(_positivity_kernel!, semi, nelements(semi.mesh), semi, u)
+    e = findfirst(!iszero, semi.positivity)
+    e === nothing && return nothing
+    q = semi.positivity[e]
+    ρ, _, _, p = cons2prim(_value(u, e, semi.qphi[q]), semi.equations)
+    return _positivity_error(e, semi.qpoint[q], ρ, p)
+end
+
+@kernel function _positivity_kernel!(semi, u)
+    e = @index(Global, Linear)
+    @inbounds semi.positivity[e] = _first_nonpositive(u, semi, e)
+end
+
+# The first volume quadrature point of element `e` where the density or the pressure is not
+# positive, or 0.
+@inline function _first_nonpositive(u, semi::DGSemidiscretization, e)
     eq = semi.equations
-    @inbounds for e in eachindex(semi.mass), q in semi.qptr[e]:(semi.qptr[e + 1] - 1)
+    @inbounds for q in semi.qptr[e]:(semi.qptr[e + 1] - 1)
         ρ, _, _, p = cons2prim(_value(u, e, semi.qphi[q]), eq)
-        ρ > 0 && p > 0 || _positivity_error(e, semi.qpoint[q], ρ, p)
+        ρ > 0 && p > 0 || return Int32(q)
     end
-    return nothing
+    return Int32(0)
 end
 
 @noinline _positivity_error(e, x, ρ, p) =

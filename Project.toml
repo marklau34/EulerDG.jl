@@ -6,6 +6,7 @@ authors = ["Mark Lau <mark@tidalflight.com>"]
 [deps]
 CartesianMeshes = "357f21b8-02af-4872-bdb4-87c05a034e47"
 CutCellMethods = "844582fc-e8cc-4c04-acf7-8b8ea17ba2c5"
+KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 MeshLibrary = "2a0e3053-d7ad-441e-be9f-5563ad5a0828"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
@@ -17,6 +18,7 @@ WriteVTK = "64499a7a-5c06-52f2-abe2-ccb03c286192"
 [compat]
 CartesianMeshes = "0.2.3"
 CutCellMethods = "0.3.0"
+KernelAbstractions = "0.9.44"
 LinearAlgebra = "1"
 MeshLibrary = "0.4.5"
 Printf = "1"

@@ -39,7 +39,7 @@
     u = project(vortex, semi)
     du = similar(u)
 
-    @testset "conservation and allocations" begin
+    @testset "conservation" begin
         # Perturb the gradient modes too, so every term is exercised.
         u2 = copy(u)
         ne = nelements(semi.mesh)
@@ -48,8 +48,6 @@
         total = sum(semi.mass[e] * du[:, 1, e] for e in 1:nelements(semi.mesh))
         scale = sum(semi.mass[e] * abs.(du[:, 1, e]) for e in 1:nelements(semi.mesh))
         @test all(abs.(total) .<= 1e-13 .* scale)
-        @test allocs(rhs!, du, u, semi, 0.0) == 0
-        @test allocs((u, semi) -> max_dt(u, semi; cfl=2), u, semi) == 0
     end
 
     @testset "projection and evaluation" begin

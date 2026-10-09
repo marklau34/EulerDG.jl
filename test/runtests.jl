@@ -29,6 +29,7 @@ include("flows.jl")
     include("test_cut.jl")
     include("test_walls.jl")
     include("test_circle.jl")
+    include("test_kernels.jl")
     if TIER == "scheduled"
         include("scheduled/test_phase1_gate.jl")
         include("scheduled/test_phase2_gate.jl")

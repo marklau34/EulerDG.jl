@@ -23,8 +23,10 @@ Time marching.
 """
 module PseudoTime
 
+using KernelAbstractions: @index, @kernel
 using ..EulerDG: nelements
-using ..Semidiscretization: DGSemidiscretization, assert_positive, local_dt!, max_dt, rhs!
+using ..Semidiscretization: DGSemidiscretization, _launch!, assert_positive, local_dt!, max_dt,
+                           rhs!
 
 export SSPRK3Cache, ssprk3_step!, integrate!, residual_norms, solve_steady!
 
@@ -49,16 +51,17 @@ Advance `u` by one SSP-RK3 step:
     u1 = u + dt L(u),   u2 = 3/4 u + 1/4 (u1 + dt L(u1)),   u = 1/3 u + 2/3 (u2 + dt L(u2))
 
 `dt` is either a number, the global step from `t` to `t + dt`, or a vector of one step per element,
-frozen across the stages: a pseudo-time step towards a steady state, with `t` held fixed.
+frozen across the stages: a pseudo-time step towards a steady state, with `t` held fixed. The
+stage updates are threaded over elements like [`rhs!`](@ref).
 """
 function ssprk3_step!(u, semi::DGSemidiscretization, t, dt::Real, cache::SSPRK3Cache)
     u1, u2, du = cache.u1, cache.u2, cache.du
     rhs!(du, u, semi, t)
-    @. u1 = u + dt * du
+    _stage!(u1, 0, u, 1, u, dt, du, semi)
     rhs!(du, u1, semi, t + dt)
-    @. u2 = 3 / 4 * u + 1 / 4 * (u1 + dt * du)
+    _stage!(u2, 3 / 4, u, 1 / 4, u1, dt, du, semi)
     rhs!(du, u2, semi, t + dt / 2)
-    @. u = 1 / 3 * u + 2 / 3 * (u2 + dt * du)
+    _stage!(u, 1 / 3, u, 2 / 3, u2, dt, du, semi)
     return u
 end
 
@@ -70,24 +73,36 @@ end
 # The local-step SSP-RK3 step, with `cache.du` already holding L(u).
 function _local_step!(u, semi, t, dt, cache)
     u1, u2, du = cache.u1, cache.u2, cache.du
-    _stage!(u1, 0, u, 1, u, dt, du)
+    _stage!(u1, 0, u, 1, u, dt, du, semi)
     rhs!(du, u1, semi, t)
-    _stage!(u2, 3 / 4, u, 1 / 4, u1, dt, du)
+    _stage!(u2, 3 / 4, u, 1 / 4, u1, dt, du, semi)
     rhs!(du, u2, semi, t)
-    _stage!(u, 1 / 3, u, 2 / 3, u2, dt, du)
+    _stage!(u, 1 / 3, u, 2 / 3, u2, dt, du, semi)
     return u
 end
 
-# out = a x + b (y + dt_e du), element by element. `out` may be `x`.
-function _stage!(out, a, x, b, y, dt, du)
-    @inbounds for e in axes(out, 3)
-        h = dt[e]
-        for i in axes(out, 2), k in axes(out, 1)
-            out[k, i, e] = a * x[k, i, e] + b * (y[k, i, e] + h * du[k, i, e])
-        end
-    end
+# out = a x + b (y + dt du), element by element, with `dt` one step or one per element. `out` may
+# be `x`. With a = 0 and b = 1 it is bitwise `y + dt du`.
+function _stage!(out, a, x, b, y, dt, du, semi)
+    _launch!(_stage_kernel!, semi, size(out, 3), out, a, x, b, y, dt, du)
     return out
 end
+
+@kernel function _stage_kernel!(out, a, x, b, y, dt, du)
+    e = @index(Global, Linear)
+    _stage_element!(out, a, x, b, y, dt, du, e)
+end
+
+@inline function _stage_element!(out, a, x, b, y, dt, du, e)
+    h = _step(dt, e)
+    @inbounds for i in axes(out, 2), k in axes(out, 1)
+        out[k, i, e] = a * x[k, i, e] + b * (y[k, i, e] + h * du[k, i, e])
+    end
+    return nothing
+end
+
+@inline _step(dt::Real, _) = dt
+@inline _step(dt::AbstractVector, e) = @inbounds dt[e]
 
 """
     integrate!(u, semi, (t0, t1); cfl=2, maxsteps=10^7, callback=nothing) -> (; t, steps)

@@ -1,7 +1,8 @@
 # =====================================
 # The inviscid circle at Mach 0.3, at low resolution
 #
-# Run with `julia --project=examples examples/circle.jl [cells_per_diameter]` (default 8). Cuts a
+# Run with `julia --project=examples -t auto examples/circle.jl [cells_per_diameter]` (default 8);
+# `-t` sets the threads the solver's kernels run on, and the results are the same on any. Cuts a
 # uniform grid over [-3, 3]^2 round a circle of diameter 1 centred on a grid line, marches the P1
 # DG discretization to a steady state with local steps -- HLLC, the mirror-state slip wall and the
 # characteristic farfield -- and writes to out/circle/:

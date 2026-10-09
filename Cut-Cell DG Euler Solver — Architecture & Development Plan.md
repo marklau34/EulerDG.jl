@@ -62,8 +62,8 @@ Everything upstream of PolygonMesh can change (quadtree, curved faces, 3D) witho
 
 - State and residual are 4 × 3 × elements arrays, as in Trixi.
 - Element and face data are struct-of-arrays: geometry, quadrature points and weights, normals, basis coefficients, neighbour ids, face kind.
-- The right-hand side runs four passes: element volume integrals, interior faces, boundary faces, then division by |K|.
-- Face passes scatter into both neighbours. A serial loop is enough on CPU; colouring or a two-pass gather covers a later GPU port.
+- The right-hand side runs two passes: the flux at every face Gauss point, into a face buffer, then each element's volume integrals, face integrals and division by |K|.
+- The face pass is a two-pass gather rather than a scatter: each element sums its own faces' fluxes, in increasing face order. No two threads write to the same element, and the sums are bitwise those of a serial loop whatever the thread count. **Done (Oct 9)**: the face, element, time-step, positivity and stage loops are KernelAbstractions kernels, threaded on the CPU backend; the same kernels serve a later GPU port.
 
 ## Cut-cell preprocessing requirements
 

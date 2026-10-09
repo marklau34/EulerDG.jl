@@ -2,7 +2,7 @@
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "396a157766fa07583d5cdfa50c769fb17a818b56"
+project_hash = "c8595f4e2b5821939a8bef79e63c5b0f586bad44"
 
 [[deps.ADTypes]]
 deps = ["PrecompileTools"]
@@ -479,7 +479,7 @@ uuid = "4e289a0a-7415-4d19-859d-a7e5c4648b56"
 version = "1.0.7"
 
 [[deps.EulerDG]]
-deps = ["CartesianMeshes", "LinearAlgebra", "Printf", "StaticArrays", "StructArrays", "WriteVTK"]
+deps = ["CartesianMeshes", "CutCellMethods", "LinearAlgebra", "MeshLibrary", "Printf", "SDFLibrary", "StaticArrays", "StructArrays", "WriteVTK"]
 path = "."
 uuid = "4b9a1561-1bdc-4288-bb30-1dac574ff254"
 version = "0.1.0"
