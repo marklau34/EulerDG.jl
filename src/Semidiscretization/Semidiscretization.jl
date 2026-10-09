@@ -37,7 +37,7 @@ module Semidiscretization
 using KernelAbstractions: @index, @kernel, CPU
 using StaticArrays: SMatrix, SVector
 using ..EulerDG: PolygonMesh, nelements, nfaces, element_nodes, interior_faces, boundary_faces
-using ..Quadrature: GAUSS2, polygon_rule
+using ..Quadrature: GAUSS2, _is_box, polygon_rule
 using ..Basis: ElementBasis, element_basis, basis_values, basis_gradients
 using ..Equations: cons2prim, flux, flux_lax_friedrichs, max_abs_speed
 
@@ -94,7 +94,7 @@ end
 """
     DGSemidiscretization(mesh, equations; surface_flux=flux_lax_friedrichs,
                          boundary_conditions=(;), source_terms=nothing, volume_degree=2,
-                         backend=CPU(), grainsize=64)
+                         box_degree=3, backend=CPU(), grainsize=64)
 
 Build the discretization.
 
@@ -103,7 +103,11 @@ Build the discretization.
 - `source_terms`, if given, is called as `source_terms(u, x, t, equations)` like Trixi's, at every
   volume quadrature point, and added to the right-hand side. A manufactured solution enters this
   way.
-- `volume_degree` is the degree of the element rules: 2 by default, 4 to over-integrate.
+- `volume_degree` is the degree of the rules on elements that are not rectangles -- cut cells,
+  triangulated -- 2 by default, 4 to over-integrate. `box_degree` is the degree of the tensor
+  Gauss rule on rectangles (full cells, and coarse cells with hanging nodes): 3 by default, 2 x 2
+  points, or 5 for 3 x 3. A rectangle is symmetric however it is integrated, so the higher degree
+  that removes the ear-clipping asymmetry of mirrored cut cells is not needed there.
 - `backend` is the KernelAbstractions backend the kernels run on. Only `CPU()` for now, since the
   solver data are host arrays. It uses all of Julia's threads (`julia -t`).
 - `grainsize` is the fewest elements or faces a thread takes in one kernel launch. A launch over
@@ -115,7 +119,7 @@ mutate shared state.
 """
 function DGSemidiscretization(mesh::PolygonMesh{T}, equations; surface_flux=flux_lax_friedrichs,
                               boundary_conditions::NamedTuple=(;), source_terms=nothing,
-                              volume_degree::Integer=2, backend=CPU(),
+                              volume_degree::Integer=2, box_degree::Integer=3, backend=CPU(),
                               grainsize::Integer=64) where {T}
     grainsize >= 1 || throw(ArgumentError("grainsize must be at least 1, not $grainsize"))
     names = mesh.boundary_names
@@ -140,7 +144,9 @@ function DGSemidiscretization(mesh::PolygonMesh{T}, equations; surface_flux=flux
     for e in 1:ne
         lo, hi = mesh.elements.lo[e], mesh.elements.hi[e]
         c = (lo + hi) / 2
-        x, w = polygon_rule(mesh.points, element_nodes(mesh, e); degree=volume_degree, origin=c)
+        ids = element_nodes(mesh, e)
+        degree = _is_box(mesh.points, ids) ? box_degree : volume_degree
+        x, w = polygon_rule(mesh.points, ids; degree, origin=c)
         b = try
             element_basis(lo, hi, x, w; origin=c)
         catch err
@@ -275,8 +281,20 @@ end
                           args::Vararg{Any,N}) where {K,N}
     n > 0 || return nothing
     ws = min(n, max(semi.grainsize, cld(n, Threads.nthreads())))
-    kernel(semi.backend)(args...; ndrange=n, workgroupsize=ws)
+    try
+        kernel(semi.backend)(args...; ndrange=n, workgroupsize=ws)
+    catch err
+        _rethrow_task_error(err)
+    end
     return nothing
+end
+
+# An error inside a threaded launch arrives wrapped in the failed task, or in several; throw the
+# first task's own error instead, such as the `DomainError` of a negative pressure's square root.
+@noinline function _rethrow_task_error(err)
+    err isa CompositeException && !isempty(err.exceptions) && (err = first(err.exceptions))
+    err isa TaskFailedException && throw(err.task.result)
+    throw(err)
 end
 
 # =====================================
@@ -313,6 +331,27 @@ end
     _element_rhs!(du, u, semi, t, e)
 end
 
+# The steady solver's first right-hand side of an iteration: `rhs!`, plus each face's wave speed
+# from the same face traces, for `_steps!`, and the positivity flags from the same volume points,
+# for `_check_positivity`. One pass over the faces and one over the elements instead of three of
+# each; the results are bitwise those of `rhs!`, `local_dt!` and `assert_positive`.
+function _rhs_steady!(du, u, semi::DGSemidiscretization, t)
+    _launch!(_face_flux_speed_kernel!, semi, nfaces(semi.mesh), semi, u, t)
+    _launch!(_element_rhs_check_kernel!, semi, nelements(semi.mesh), du, u, semi, t)
+    return du
+end
+
+@kernel function _face_flux_speed_kernel!(semi, u, t)
+    f = @index(Global, Linear)
+    @inbounds semi.fhat[f] = _face_flux(u, semi, t, f)
+    @inbounds semi.fspeed[f] = _face_speed(u, semi, f)
+end
+
+@kernel function _element_rhs_check_kernel!(du, u, semi, t)
+    e = @index(Global, Linear)
+    _element_rhs!(du, u, semi, t, e, Val(true))
+end
+
 # F̂ at face `f`'s two Gauss points: the surface flux between the two traces on an interior face,
 # and the boundary's condition on a boundary face.
 @inline function _face_flux(u, semi::DGSemidiscretization, t, f)
@@ -347,17 +386,25 @@ end
 #     ( ∫ ∇φ_i · F(U) + ∫ φ_i S - ∮ φ_i F̂ ) / |K|
 #
 # The gradients are constant, so the weighted x and y fluxes are summed first; mode 1 has no
-# gradient. The face fluxes come from `semi.fhat`.
-@inline function _element_rhs!(du, u, semi::DGSemidiscretization{T}, t, e) where {T}
+# gradient. The face fluxes come from `semi.fhat`. With `check`, the first volume point where the
+# density or the pressure is not positive goes into `semi.positivity`, as `assert_positive` finds it.
+@inline function _element_rhs!(du, u, semi::DGSemidiscretization{T}, t, e,
+                               ::Val{check}=Val(false)) where {T,check}
     eq = semi.equations
     @inbounds begin
         Fx = Fy = zero(SVector{4,T})
+        bad = Int32(0)
         for q in semi.qptr[e]:(semi.qptr[e + 1] - 1)
             U = _value(u, e, semi.qphi[q])
+            if check
+                ρ, _, _, p = cons2prim(U, eq)
+                (ρ > 0 && p > 0) || bad != 0 || (bad = Int32(q))
+            end
             w = semi.qweight[q]
             Fx += w * flux(U, 1, eq)
             Fy += w * flux(U, 2, eq)
         end
+        check && (semi.positivity[e] = bad)
         g = semi.gradients[e]
         r = zero(SMatrix{4,3,T,12}) +
             hcat(zero(SVector{4,T}), g[1, 2] * Fx + g[2, 2] * Fy, g[1, 3] * Fx + g[2, 3] * Fy)
@@ -455,6 +502,12 @@ function local_dt!(dt::AbstractVector, u, semi::DGSemidiscretization; cfl)
     return dt
 end
 
+# `local_dt!` from the face speeds `_rhs_steady!` left in `semi.fspeed`.
+function _steps!(dt::AbstractVector, semi::DGSemidiscretization; cfl)
+    _launch!(_element_speed_kernel!, semi, nelements(semi.mesh), dt, semi, cfl)
+    return dt
+end
+
 """
     max_dt(u, semi; cfl) -> T
 
@@ -478,6 +531,11 @@ the first such element, and its first such point.
 """
 function assert_positive(u, semi::DGSemidiscretization)
     _launch!(_positivity_kernel!, semi, nelements(semi.mesh), semi, u)
+    return _check_positivity(u, semi)
+end
+
+# Throw for the first element `semi.positivity` flags, at its flagged point.
+function _check_positivity(u, semi::DGSemidiscretization)
     e = findfirst(!iszero, semi.positivity)
     e === nothing && return nothing
     q = semi.positivity[e]

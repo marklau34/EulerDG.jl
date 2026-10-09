@@ -124,7 +124,7 @@ Each element advances with its own step, computed from its own area and face flu
 \Delta t_K = \mathrm{CFL} \cdot \frac{|K|}{(2p+1) \sum_{f \in \partial K} \lambda_f \, |f|}, \qquad \lambda_f = \max_{\text{face quad. pts, both sides}} \left( |v \cdot n| + c \right)
 ```
 
-The face sum includes wall faces. A thin sliver along a long wall face therefore gets a step that scales with its thickness, which is the correct limit. Calibrate the CFL number on full cells first.
+The face sum includes wall faces. A thin sliver along a long wall face therefore gets a step that scales with its thickness, which is the correct limit. Calibrate the CFL number on full cells first. **Calibrated (Oct 9):** 3 for steady runs with local steps, held on the nested circle and airfoil and on a 1e-12 sliver; 3.5 broke a cut cell of the circle. Time-accurate runs keep 2.
 
 ### Implementation
 

@@ -75,3 +75,73 @@ kinds), in ms per `solve_steady!` iteration:
   - Fuse the positivity check into the volume loop.
 
   Together these halve the launches.
+
+## 4. Speed work (Oct 9)
+
+**The profile.** The converged nested circle at 32 cells per diameter: 23,374 elements, 47,700
+faces, 16 threads. Each kernel was timed on its own, per iteration:
+
+| Kernel | Calls per iteration | Share |
+| --- | --- | --- |
+| Face fluxes | 3 | 44% |
+| Element right-hand side | 3 | 29% |
+| Face wave speeds | 1 | 15% |
+| Stage updates | 3 | 6% |
+| Positivity | 1 | 4% |
+| Element steps, residual norms | 1 each | 2% |
+
+- A whole iteration took 3.9 ms, 1 ms more than the parts timed alone. Inside an iteration the
+  four state arrays and the 213,000 volume points no longer fit in cache.
+- Garbage collection was 0%.
+- The face pass moves about 400 bytes per face (basis values, normals, the two states, the
+  result), about 19 MB per pass. That takes about its measured 0.4 ms at laptop bandwidth, so it is
+  bound by memory, not arithmetic.
+
+**Changes:**
+
+1. **`box_degree`.** `volume_degree=4` was meant for cut fragments, where it removes the
+   ear-clipping asymmetry, but it also gave every rectangle the 3 x 3 rule. Rectangles now take
+   `box_degree`, 3 by default: 2 x 2 points, 4 instead of 9.
+   - At 8 cells per diameter on the nested mesh the iterations are identical (50,987). cd, the
+     stagnation Cp and the entropy agree to 5 digits.
+   - The time per iteration falls 30%, from 2.02 ms to 1.43.
+2. **One fused pass.** The steady solver's first right-hand side of each iteration
+   (`_rhs_steady!`) also writes the face wave speeds, from the same traces, and the positivity
+   flags, from the same volume points. That replaces the separate face-speed and positivity
+   passes.
+   - The results are bitwise those of `rhs!`, `local_dt!` and `assert_positive`. The saved
+     reference runs, solve histories included, agree bit for bit.
+   - At 32 cells per diameter an iteration fell from 3.9 to 3.3 ms.
+   - The check now runs before the next iteration's fluxes instead of after the step. A state gone
+     negative can therefore fail first in a flux's square root; `solve_steady!` catches that and
+     throws the positivity error naming the element, for any stage's state.
+3. **Errors out of kernels.** `_launch!` unwraps a failed task and throws its own error, such as a
+   `DomainError`, rather than a nested `TaskFailedException`.
+
+**The CFL number.** On the 8-cell nested circle, CFL 3 converges in 34,022 iterations against
+50,987 at 2, with the same results. CFL 3.5 and 4 fail in the first few hundred iterations, at the
+same element on the circle's shoulder, with a 2,000-iteration ramp too. CFL 3 then held on three
+harder cases, each with the same forces as at 2:
+
+| Case | Iterations at CFL 2 | Iterations at CFL 3 |
+| --- | --- | --- |
+| Circle, nested, 16 cells per diameter | 105,979 | 70,630 |
+| NACA 0012, nested, 16 cells per chord | 113,602 | 75,765 |
+| Circle with a 1e-12 sliver, 6 radii, 8 cells per diameter | 25,632 | 17,121 |
+
+So `solve_steady!`'s default is now CFL 3; `integrate!`, time-accurate, keeps 2. The gate study's
+saved runs were made at CFL 2, so their iteration counts are not comparable with new ones; their
+steady states are.
+
+**Together.** NACA 0012 at 16 cells per chord on the nested mesh went from 208 s (16-cell rings,
+3 x 3 rule on rectangles, CFL 2) to 104 s. Wall times on this laptop vary by 10-20% from run to
+run with thermal and core scheduling, so the iteration counts are the firmer measure.
+
+**Not done, in rough order of payoff:**
+
+- **The iteration count**, which grows about 3x per refinement on the nested mesh. The implicit
+  solver is the real fix. Explicit options are implicit residual smoothing, multigrid over the
+  nested levels, and low-Mach preconditioning of the pseudo-time derivative.
+- **The face pass's memory traffic.** Store less per face, for instance basis values computed on
+  the fly for faces between whole cells, and keep each face's data together.
+- **Fusing the stage update into the element kernel**: about 5%.

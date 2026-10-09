@@ -20,6 +20,7 @@ function kernel_bodies!(du, u, semi, t, dt, cache)
     end
     for e in 1:nelements(semi.mesh)
         SD._element_rhs!(du, u, semi, t, e)
+        SD._element_rhs!(du, u, semi, t, e, Val(true))
         SD._element_speed!(dt, semi, 2.0, e)
         semi.positivity[e] = SD._first_nonpositive(u, semi, e)
         PT._stage_element!(cache.u1, 3 / 4, u, 1 / 4, u, dt, du, e)
@@ -135,6 +136,35 @@ end
         for k in keys(serial)
             @test isequal(serial[k], split[k])
         end
+    end
+
+    @testset "the steady solver's fused pass on the $name" for (name, case) in pairs(cases)
+        # One pass gives bitwise what rhs!, local_dt! and assert_positive give separately.
+        semi, u = case(12)
+        du, du2 = similar(u), similar(u)
+        dt, dt2 = zeros(size(u, 3)), zeros(size(u, 3))
+        rhs!(du, u, semi, 0.0)
+        local_dt!(dt, u, semi; cfl=1.5)
+        SD._rhs_steady!(du2, u, semi, 0.0)
+        SD._steps!(dt2, semi; cfl=1.5)
+        @test du2 == du && dt2 == dt
+        @test all(iszero, semi.positivity) && SD._check_positivity(u, semi) === nothing
+        # The flags come from the element pass; the face pass of a negative state may fail first,
+        # at a square root, which the next testset covers.
+        bad = copy(u)
+        bad[4, 1, size(u, 3) ÷ 2] = 0                     # no energy: negative pressure
+        SD._launch!(SD._element_rhs_check_kernel!, semi, size(u, 3), du2, bad, semi, 0.0)
+        flagged = try SD._check_positivity(bad, semi); "" catch err; sprint(showerror, err) end
+        direct = try assert_positive(bad, semi); "" catch err; sprint(showerror, err) end
+        @test !isempty(flagged) && flagged == direct
+    end
+
+    @testset "a negative state in the steady solver is named" begin
+        # Its fluxes may fail first, at a square root; the error still names the element.
+        semi, u = kernel_circle(12)
+        u[4, 1, 100] = 0
+        err = try solve_steady!(u, semi; maxiter=5); nothing catch e; e end
+        @test err isa DomainError && occursin("element 100", sprint(showerror, err))
     end
 
     @test throws_with(() -> kernel_vortex(4; grainsize=0), "grainsize must be at least 1")

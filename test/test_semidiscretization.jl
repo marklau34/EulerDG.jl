@@ -50,6 +50,22 @@
         @test all(abs.(total) .<= 1e-13 .* scale)
     end
 
+    @testset "volume rules by element shape" begin
+        # Rectangles, hanging nodes and all, take the tensor rule of `box_degree`; every other
+        # polygon is triangulated, with the triangle rule of `volume_degree`.
+        for m in (tilted_wall(), hanging_node())
+            bcs = freestream_conditions(m, uinf)
+            npoints(s) = [s.qptr[e + 1] - s.qptr[e] for e in 1:nelements(m)]
+            box = [EulerDG.Quadrature._is_box(m.points, element_nodes(m, e)) for e in 1:nelements(m)]
+            tris = [length(element_nodes(m, e)) - 2 for e in 1:nelements(m)]
+            @test any(box)
+            for (vd, bd, nb, nt) in ((2, 3, 4, 3), (4, 3, 4, 6), (4, 5, 9, 6))
+                s = DGSemidiscretization(m, eq; boundary_conditions=bcs, volume_degree=vd, box_degree=bd)
+                @test npoints(s) == [b ? nb : nt * k for (b, k) in zip(box, tris)]
+            end
+        end
+    end
+
     @testset "projection and evaluation" begin
         # A linear field is reproduced exactly; mode 1 is the cell average.
         lin(x, t, eq) = SVector(1 + 0.1x[1], 0.2 - 0.05x[2], 0.3, 2 + 0.01 * (x[1] + x[2]))

@@ -25,8 +25,8 @@ module PseudoTime
 
 using KernelAbstractions: @index, @kernel
 using ..EulerDG: nelements
-using ..Semidiscretization: DGSemidiscretization, _launch!, assert_positive, local_dt!, max_dt,
-                           rhs!
+using ..Semidiscretization: DGSemidiscretization, _check_positivity, _launch!, _rhs_steady!,
+                           _steps!, assert_positive, local_dt!, max_dt, rhs!
 
 export SSPRK3Cache, ssprk3_step!, integrate!, residual_norms, solve_steady!
 
@@ -152,13 +152,16 @@ function residual_norms(du, semi::DGSemidiscretization{T}) where {T}
 end
 
 """
-    solve_steady!(u, semi; cfl=2, cfl_start=0.1, ramp=200, tol=1e-10, maxiter=100_000,
+    solve_steady!(u, semi; cfl=3, cfl_start=0.1, ramp=200, tol=1e-10, maxiter=100_000,
                   t=0, callback=nothing) -> (; converged, iterations, residual, history)
 
 March `u` to a steady state in pseudo-time with local steps and SSP-RK3. The CFL number ramps
-linearly from `cfl_start` to `cfl` over the first `ramp` iterations. Each element's step is
+linearly from `cfl_start` to `cfl` over the first `ramp` iterations. The default of 3 takes two
+thirds of the iterations 2 does, to the same steady state; 3.5 broke a cut cell of the circle at 8
+cells per diameter, longer ramp or not. Each element's step is
 frozen at the start of an iteration and kept across the stages. The state is checked for
-positivity after every iteration.
+positivity after every iteration -- in the next iteration's first right-hand side, which takes the
+face speeds for the steps from the same pass -- and a stage state that breaks a flux is named.
 
 The run stops when the L2 norm of the cell-average density residual ([`residual_norms`](@ref))
 has fallen by `tol` from its first value, or after `maxiter` iterations. `history` holds that
@@ -166,7 +169,7 @@ relative residual at the start of each iteration, and `callback(u, iteration, no
 with the norms each iteration if given. A zero first residual, as for a state that is already
 steady to the last bit, counts as converged at once.
 """
-function solve_steady!(u, semi::DGSemidiscretization{T}; cfl=2, cfl_start=0.1, ramp::Integer=200,
+function solve_steady!(u, semi::DGSemidiscretization{T}; cfl=3, cfl_start=0.1, ramp::Integer=200,
                        tol=1e-10, maxiter::Integer=100_000, t=zero(T),
                        callback=nothing) where {T}
     cache = SSPRK3Cache(u)
@@ -174,7 +177,15 @@ function solve_steady!(u, semi::DGSemidiscretization{T}; cfl=2, cfl_start=0.1, r
     history = T[]
     r0 = zero(T)
     for it in 1:maxiter
-        rhs!(cache.du, u, semi, t)
+        # One pass gives the right-hand side, the face speeds for this iteration's steps, and the
+        # positivity check of the last iteration's step. A state gone negative can fail in the
+        # face fluxes first, at a square root; then the check names the element instead.
+        try
+            _rhs_steady!(cache.du, u, semi, t)
+        catch err
+            _name_negative(err, semi, u)
+        end
+        _check_positivity(u, semi)
         norms = residual_norms(cache.du, semi)
         it == 1 && (r0 = norms.l2)
         rel = r0 > 0 ? norms.l2 / r0 : zero(T)
@@ -183,11 +194,24 @@ function solve_steady!(u, semi::DGSemidiscretization{T}; cfl=2, cfl_start=0.1, r
         isfinite(rel) || error("solve_steady!: the residual is $rel at iteration $it")
         rel <= tol && return (; converged=true, iterations=it - 1, residual=rel, history)
         c = cfl_start + (cfl - cfl_start) * min(1, (it - 1) / max(ramp, 1))
-        local_dt!(dt, u, semi; cfl=c)
-        _local_step!(u, semi, t, dt, cache)
-        assert_positive(u, semi)
+        _steps!(dt, semi; cfl=c)
+        try
+            _local_step!(u, semi, t, dt, cache)
+        catch err
+            _name_negative(err, semi, cache.u1, cache.u2)
+        end
     end
+    assert_positive(u, semi)
     return (; converged=false, iterations=maxiter, residual=last(history), history)
+end
+
+# After `err` in a right-hand side: the positivity error of the first of `states` that is not
+# positive, which says where; or `err` itself if they all are.
+@noinline function _name_negative(err, semi, states...)
+    for v in states
+        assert_positive(v, semi)
+    end
+    throw(err)
 end
 
 end # module PseudoTime
