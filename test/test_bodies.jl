@@ -17,16 +17,19 @@
     @test length(circle_points(; radius=1, n=7)) == 7
     @test throws_with(() -> circle_points(; radius=1), "either the number of segments")
 
-    # NACA sections: a sharp trailing edge, counter-clockwise, the leading edge at `le`, the widest
-    # segment at most h / per_cell.
+    # NACA sections: a sharp trailing edge, counter-clockwise, the leading edge at `le`, every
+    # segment at most h / per_cell -- widest at the trailing edge, finest at the leading edge.
     h = 0.02
     p = naca4_points("0012"; h)
-    k = ceil(Int, 4 * π / 2 / h)
-    @test length(p) == 2k
+    k = length(p) ÷ 2
+    @test iseven(length(p)) && k >= ceil(Int, 4 * π / 2 / h)
     @test p[1] == PV(1, 0)                                         # the trailing edge, once
     @test p[k + 1] == PV(0, 0)                                     # the leading edge
     @test all(q -> q[2] > 0, p[2:k]) && all(q -> q[2] < 0, p[(k + 2):end])
-    @test maximum(hypot((p[mod1(j + 1, end)] - p[j])...) for j in eachindex(p)) <= h / 4
+    seglen(j) = hypot((p[mod1(j + 1, length(p))] - p[j])...)
+    @test maximum(seglen, eachindex(p)) <= h / 4
+    @test seglen(1) > h / 5 && seglen(2k) > h / 5                  # no pile-up at the trailing edge
+    @test seglen(k) < h / 20 && seglen(k + 1) < h / 20             # clustered at the leading edge
     area = polygon_body(p).points |> pts -> sum(pts[j][1] * pts[mod1(j + 1, end)][2] -
                                                 pts[mod1(j + 1, end)][1] * pts[j][2]
                                                 for j in eachindex(pts)) / 2

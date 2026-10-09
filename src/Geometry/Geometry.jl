@@ -102,10 +102,13 @@ end
 
 A NACA 4-digit section with a sharp trailing edge (the thickness coefficient -0.1036 closes it),
 as a counter-clockwise polygon from the trailing edge along the upper surface, round the leading
-edge and back along the lower surface. Each surface has `n` cosine-spaced segments, clustered at
-both ends. Give `n`, or the cell size `h` to make the widest segment, at mid-chord, at most
-`h / per_cell`. The leading edge is at `le`, and the section is turned nose-up by `alpha_deg`
-about it.
+edge and back along the lower surface.
+
+Each surface has `n` segments with half-cosine spacing, `x = 1 - cos(π j / 2n)`: clustered at the
+leading edge, where the curvature is, and widest at the trailing edge, where the section is
+nearly straight. Clustering there too would pile tiny wall faces into the trailing-edge cell. Give
+`n`, or the cell size `h` for segments no longer than `h / per_cell` anywhere. The leading edge is
+at `le`, and the section is turned nose-up by `alpha_deg` about it.
 """
 function naca4_points(digits::AbstractString="0012"; n=nothing, h=nothing, per_cell=4,
                       chord=1.0, le=(0.0, 0.0), alpha_deg=0.0)
@@ -115,20 +118,32 @@ function naca4_points(digits::AbstractString="0012"; n=nothing, h=nothing, per_c
     p = parse(Int, digits[2]) / 10
     t = parse(Int, digits[3:4]) / 100
     (m == 0) == (p == 0) || throw(ArgumentError("NACA $digits has camber without its position"))
-    k = _segments(π * chord / 2, n, h, per_cell)
     yt(x) = 5t * (0.2969sqrt(x) - 0.1260x - 0.3516x^2 + 0.2843x^3 - 0.1036x^4)
     yc(x) = m == 0 ? 0.0 : x < p ? m / p^2 * (2p * x - x^2) : m / (1 - p)^2 * ((1 - 2p) + 2p * x - x^2)
     dyc(x) = m == 0 ? 0.0 : x < p ? 2m / p^2 * (p - x) : 2m / (1 - p)^2 * (p - x)
-    xs = [(1 - cospi(j / k)) / 2 for j in 0:k]
     surface(x, s) = (θ = atan(dyc(x)); PV(x - s * yt(x) * sin(θ), yc(x) + s * yt(x) * cos(θ)))
-    upper = [surface(x, 1) for x in reverse(xs)]
-    lower = [surface(x, -1) for x in xs[2:(end - 1)]]
-    # The trailing edge is one point: yt(1) is zero to round-off.
-    upper[1] = PV(1, yc(1.0))
     α = deg2rad(alpha_deg)
     R(q) = PV(cos(α) * q[1] + sin(α) * q[2], -sin(α) * q[1] + cos(α) * q[2])
-    return [PV(le) + chord * R(q) for q in vcat(upper, lower)]
+    function section(k)
+        xs = [1 - cospi(j / 2k) for j in 0:k]
+        upper = [surface(x, 1) for x in reverse(xs)]
+        lower = [surface(x, -1) for x in xs[2:(end - 1)]]
+        # The trailing edge is one point: yt(1) is zero to round-off.
+        upper[1] = PV(1, yc(1.0))
+        return [PV(le) + chord * R(q) for q in vcat(upper, lower)]
+    end
+    # The widest spacing in x is π/(2k) chords, at the trailing edge. The surface slopes there, so
+    # the segments are a little longer: grow k until they fit.
+    k = _segments(π * chord / 2, n, h, per_cell)
+    pts = section(k)
+    while n === nothing && (w = _widest(pts)) > h / per_cell
+        k = ceil(Int, k * w * per_cell / h)
+        pts = section(k)
+    end
+    return pts
 end
+
+_widest(pts) = maximum(hypot((pts[mod1(j + 1, length(pts))] - pts[j])...) for j in eachindex(pts))
 
 """
     grid_shifts(n) -> Vector{SVector{2,Float64}}
