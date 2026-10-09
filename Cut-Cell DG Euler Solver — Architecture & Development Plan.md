@@ -10,7 +10,7 @@ Version 1 delivers a converged, steady, subsonic 2D airfoil solution from a P1 m
 | --- | --- |
 | Equations | 2D compressible Euler, steady only, subsonic (local Mach < 1) |
 | Discretization | Modal DG, P = 1 on every element |
-| Geometry | Existing SDF library; one straight wall segment per cut fragment |
+| Geometry | Closed polygons (SDFLibrary `SDFMesh`), cut exactly by CutCellMethods; a fragment's wall is the polygon's own pieces in the cell (Phase 2) |
 | Background mesh | Static uniform Cartesian grid (CartesianMeshes' `CartesianGrid`); stretching deferred (Oct 8); no AMR |
 | Small cells | Local time stepping only; no state redistribution, no merging |
 | Runtime | Julia, CPU, FP64 (assumed; see Open decisions) |
@@ -188,11 +188,13 @@ Phases 1 and 2 are independent and can run in parallel. The circle comes before 
 
 ### Phase 2 · Cut-mesh preprocessor
 
-- [ ] Adapt the existing cut-cell code to emit PolygonMesh
-- [ ] Root-found wall crossings, shared split points, multi-fragment cells
-- [ ] Lost-feature detection that stops with an error
-- [ ] Validation report and fluid-area convergence on the circle and NACA 0012
-- [ ] Grid-shift generator that moves the body by sub-cell offsets to create tiny fragments
+- [x] Adapt the existing cut-cell code to emit PolygonMesh
+- [x] Wall crossings, shared split points, multi-fragment cells. The crossings come from exact polyline intersection rather than an SDF root-find, because CutCellMethods takes polygons.
+- [x] Lost-feature detection that stops with an error
+- [x] Validation report and fluid-area convergence on the circle and NACA 0012
+- [x] Grid-shift generator that moves the body by sub-cell offsets to create tiny fragments
+
+**Gate passed (Oct 8).** The fluid area converges at order 2.00 on the circle and on NACA 0012, and every cut is exact for its polygon to 1e-12. A sweep of 114 cut meshes (16 shifts and 3 sliver shifts on each of 3 grids per body) gave valid meshes throughout. The smallest fragments reached about 1e-12, and freestream was preserved to 2e-15. A fragment keeps the polygon's own wall pieces, so the trailing edge is exact: a nonconvex fragment, with no truncated tip.
 
 ### Phase 3 · Cut-cell DG and walls
 

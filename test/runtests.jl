@@ -24,7 +24,10 @@ include("fixtures.jl")
     include("test_equations.jl")
     include("test_semidiscretization.jl")
     include("test_post.jl")
+    include("test_bodies.jl")
+    include("test_cut.jl")
     if TIER == "scheduled"
         include("scheduled/test_phase1_gate.jl")
+        include("scheduled/test_phase2_gate.jl")
     end
 end

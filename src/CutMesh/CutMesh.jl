@@ -12,22 +12,25 @@ Builders of the mesh contract.
 
 - Phase 1: [`uncut_mesh`](@ref), a `PolygonMesh` straight from an uncut, uniform
   `CartesianGrid`, periodic or not.
-- Phase 2: the cut adapter over CutCellMethods' exact polyline clipping. It builds faces from the
-  cutter's arcs, so both sides of every partial edge share their split points. Every fluid fragment
-  becomes its own element, and slivers are dropped below a `drop_area` keyword.
-- Phase 2: the preprocessor report, which extends `mesh_summary` with lost-feature and
-  truncated-tip lists.
+- Phase 2: [`cut_mesh`](@ref), the cut builder over CutCellMethods' exact polyline clipping:
+  crossings shared bitwise across cells, every fluid fragment its own element, slivers dropped
+  below `drop_area`, and the lost-feature checks that stop the build.
+- Phase 2: [`cut_report`](@ref), the preprocessor report.
 
 Upstream of the mesh contract: the solver-side modules never use it.
 """
 module CutMesh
 
 using CartesianMeshes: CartesianGrid, get_node
+using CutCellMethods: CutCellMethods, PolylineClippingCutCell, allocate_cache, update_cache!
+using Printf: @printf
 using StaticArrays: SVector
-using ..EulerDG: PolygonMesh
+using ..EulerDG: PolygonMesh, mesh_summary, _polygon_problem
+using ..Geometry: Body, polygon_perimeter
 
 include("uncut.jl")
+include("cut.jl")
 
-export uncut_mesh
+export uncut_mesh, cut_mesh, cut_report
 
 end # module CutMesh
