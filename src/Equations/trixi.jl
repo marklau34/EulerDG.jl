@@ -363,3 +363,218 @@ end
 See [`FluxLaxFriedrichs`](@ref).
 """
 const flux_lax_friedrichs = FluxLaxFriedrichs()
+
+# =====================================
+# compressible_euler_2d.jl, continued: rotations, HLLC and the slip wall (copied in Phase 3)
+
+# Called inside `FluxRotated` in `numerical_fluxes.jl` so the direction
+# has been normalized prior to this rotation of the state vector
+@inline function rotate_to_x(u, normal_vector, equations::CompressibleEulerEquations2D)
+    # cos and sin of the angle between the x-axis and the normalized normal_vector are
+    # the normalized vector's x and y coordinates respectively (see unit circle).
+    c = normal_vector[1]
+    s = normal_vector[2]
+
+    # Apply the 2D rotation matrix with normal and tangent directions of the form
+    # [ 1    0    0   0;
+    #   0   n_1  n_2  0;
+    #   0   t_1  t_2  0;
+    #   0    0    0   1 ]
+    # where t_1 = -n_2 and t_2 = n_1
+
+    return SVector(u[1],
+                   c * u[2] + s * u[3],
+                   -s * u[2] + c * u[3],
+                   u[4])
+end
+
+# Called inside `FluxRotated` in `numerical_fluxes.jl` so the direction
+# has been normalized prior to this back-rotation of the state vector
+@inline function rotate_from_x(u, normal_vector,
+                               equations::CompressibleEulerEquations2D)
+    # cos and sin of the angle between the x-axis and the normalized normal_vector are
+    # the normalized vector's x and y coordinates respectively (see unit circle).
+    c = normal_vector[1]
+    s = normal_vector[2]
+
+    # Apply the 2D back-rotation matrix with normal and tangent directions of the form
+    # [ 1    0    0   0;
+    #   0   n_1  t_1  0;
+    #   0   n_2  t_2  0;
+    #   0    0    0   1 ]
+    # where t_1 = -n_2 and t_2 = n_1
+
+    return SVector(u[1],
+                   c * u[2] - s * u[3],
+                   s * u[2] + c * u[3],
+                   u[4])
+end
+
+"""
+    flux_hllc(u_ll, u_rr, orientation_or_normal_direction, equations::CompressibleEulerEquations2D)
+
+Computes the HLLC flux (HLL with Contact) for compressible Euler equations developed by E.F. Toro
+[Lecture slides](http://www.prague-sum.com/download/2012/Toro_2-HLLC-RiemannSolver.pdf)
+Signal speeds: [DOI: 10.1137/S1064827593260140](https://doi.org/10.1137/S1064827593260140)
+"""
+function flux_hllc(u_ll, u_rr, normal_direction::AbstractVector,
+                   equations::CompressibleEulerEquations2D)
+    # Calculate primitive variables and speed of sound
+    rho_ll, v1_ll, v2_ll, p_ll = cons2prim(u_ll, equations)
+    rho_rr, v1_rr, v2_rr, p_rr = cons2prim(u_rr, equations)
+
+    v_dot_n_ll = v1_ll * normal_direction[1] + v2_ll * normal_direction[2]
+    v_dot_n_rr = v1_rr * normal_direction[1] + v2_rr * normal_direction[2]
+
+    norm_ = norm(normal_direction)
+    norm_sq = norm_ * norm_
+    inv_norm_sq = inv(norm_sq)
+
+    c_ll = sqrt(equations.gamma * p_ll / rho_ll) * norm_
+    c_rr = sqrt(equations.gamma * p_rr / rho_rr) * norm_
+
+    # Obtain left and right fluxes
+    f_ll = flux(u_ll, normal_direction, equations)
+    f_rr = flux(u_rr, normal_direction, equations)
+
+    # Compute Roe averages
+    sqrt_rho_ll = sqrt(rho_ll)
+    sqrt_rho_rr = sqrt(rho_rr)
+    sum_sqrt_rho = sqrt_rho_ll + sqrt_rho_rr
+
+    v1_roe = (sqrt_rho_ll * v1_ll + sqrt_rho_rr * v1_rr) / sum_sqrt_rho
+    v2_roe = (sqrt_rho_ll * v2_ll + sqrt_rho_rr * v2_rr) / sum_sqrt_rho
+    vel_roe = v1_roe * normal_direction[1] + v2_roe * normal_direction[2]
+    vel_roe_mag = v1_roe^2 + v2_roe^2
+
+    e_ll = u_ll[4] / rho_ll
+    e_rr = u_rr[4] / rho_rr
+
+    H_ll = (u_ll[4] + p_ll) / rho_ll
+    H_rr = (u_rr[4] + p_rr) / rho_rr
+
+    H_roe = (sqrt_rho_ll * H_ll + sqrt_rho_rr * H_rr) / sum_sqrt_rho
+    c_roe = sqrt((equations.gamma - 1) * (H_roe - 0.5f0 * vel_roe_mag)) * norm_
+
+    Ssl = min(v_dot_n_ll - c_ll, vel_roe - c_roe)
+    Ssr = max(v_dot_n_rr + c_rr, vel_roe + c_roe)
+    sMu_L = Ssl - v_dot_n_ll
+    sMu_R = Ssr - v_dot_n_rr
+
+    if Ssl >= 0
+        f1 = f_ll[1]
+        f2 = f_ll[2]
+        f3 = f_ll[3]
+        f4 = f_ll[4]
+    elseif Ssr <= 0
+        f1 = f_rr[1]
+        f2 = f_rr[2]
+        f3 = f_rr[3]
+        f4 = f_rr[4]
+    else
+        SStar = (rho_ll * v_dot_n_ll * sMu_L - rho_rr * v_dot_n_rr * sMu_R +
+                 (p_rr - p_ll) * norm_sq) / (rho_ll * sMu_L - rho_rr * sMu_R)
+        if Ssl <= 0 <= SStar
+            densStar = rho_ll * sMu_L / (Ssl - SStar)
+            enerStar = e_ll +
+                       (SStar - v_dot_n_ll) *
+                       (SStar * inv_norm_sq + p_ll / (rho_ll * sMu_L))
+            UStar1 = densStar
+            UStar2 = densStar *
+                     (v1_ll + (SStar - v_dot_n_ll) * normal_direction[1] * inv_norm_sq)
+            UStar3 = densStar *
+                     (v2_ll + (SStar - v_dot_n_ll) * normal_direction[2] * inv_norm_sq)
+            UStar4 = densStar * enerStar
+            f1 = f_ll[1] + Ssl * (UStar1 - u_ll[1])
+            f2 = f_ll[2] + Ssl * (UStar2 - u_ll[2])
+            f3 = f_ll[3] + Ssl * (UStar3 - u_ll[3])
+            f4 = f_ll[4] + Ssl * (UStar4 - u_ll[4])
+        else
+            densStar = rho_rr * sMu_R / (Ssr - SStar)
+            enerStar = e_rr +
+                       (SStar - v_dot_n_rr) *
+                       (SStar * inv_norm_sq + p_rr / (rho_rr * sMu_R))
+            UStar1 = densStar
+            UStar2 = densStar *
+                     (v1_rr + (SStar - v_dot_n_rr) * normal_direction[1] * inv_norm_sq)
+            UStar3 = densStar *
+                     (v2_rr + (SStar - v_dot_n_rr) * normal_direction[2] * inv_norm_sq)
+            UStar4 = densStar * enerStar
+            f1 = f_rr[1] + Ssr * (UStar1 - u_rr[1])
+            f2 = f_rr[2] + Ssr * (UStar2 - u_rr[2])
+            f3 = f_rr[3] + Ssr * (UStar3 - u_rr[3])
+            f4 = f_rr[4] + Ssr * (UStar4 - u_rr[4])
+        end
+    end
+    return SVector(f1, f2, f3, f4)
+end
+
+"""
+    boundary_condition_slip_wall(u_inner, normal_direction, x, t, surface_flux_function,
+                                 equations::CompressibleEulerEquations2D)
+
+Determine the boundary numerical surface flux for a slip wall condition.
+Imposes a zero normal velocity at the wall.
+Density is taken from the internal solution state and pressure is computed as an
+exact solution of a 1D Riemann problem. Further details about this boundary state
+are available in the paper:
+- J. J. W. van der Vegt and H. van der Ven (2002)
+  Slip flow boundary conditions in discontinuous Galerkin discretizations of
+  the Euler equations of gas dynamics
+  [PDF](https://reports.nlr.nl/bitstream/handle/10921/692/TP-2002-300.pdf?sequence=1)
+
+Details about the 1D pressure Riemann solution can be found in Section 6.3.3 of the book
+- Eleuterio F. Toro (2009)
+  Riemann Solvers and Numerical Methods for Fluid Dynamics: A Practical Introduction
+  3rd edition
+  [DOI: 10.1007/b79761](https://doi.org/10.1007/b79761)
+
+The implementation is modified to ensure non-negativity of `p_star`. This modification
+preserves entropy stability based on the analysis in the paper:
+- F. J. Hindenlang, G. J. Gassner, D. A. Kopriva (2020)
+  Stability of wall boundary condition procedures for discontinuous Galerkin spectral element approximations of the compressible Euler equations
+  [DOI: 10.1007/978-3-030-39647-3_1](https://doi.org/10.1007/978-3-030-39647-3_1)
+"""
+@inline function boundary_condition_slip_wall(u_inner, normal_direction::AbstractVector,
+                                              x, t,
+                                              surface_flux_function,
+                                              equations::CompressibleEulerEquations2D)
+    norm_ = norm(normal_direction)
+    # Normalize the vector without using `normalize` since we need to multiply by the `norm_` later
+    normal = normal_direction / norm_
+
+    # rotate the internal solution state
+    u_local = rotate_to_x(u_inner, normal, equations)
+
+    # compute the primitive variables
+    rho_local, v_normal, v_tangent, p_local = cons2prim(u_local, equations)
+
+    # Get the solution of the pressure Riemann problem
+    # See Section 6.3.3 of
+    # Eleuterio F. Toro (2009)
+    # Riemann Solvers and Numerical Methods for Fluid Dynamics: A Practical Introduction
+    # [DOI: 10.1007/b79761](https://doi.org/10.1007/b79761)
+    if v_normal <= 0
+        sound_speed = sqrt(equations.gamma * p_local / rho_local) # local sound speed
+        p_scaling_base = (1 + 0.5f0 * (equations.gamma - 1) * v_normal / sound_speed)
+        if p_scaling_base >= 0
+            p_star = p_local *
+                     p_scaling_base^(2 * equations.gamma *
+                                     equations.inv_gamma_minus_one)
+        else # avoid taking powers if p_scaling_base < 0
+            p_star = zero(p_local)
+        end
+    else # v_normal > 0
+        A = 2 / ((equations.gamma + 1) * rho_local)
+        B = p_local * (equations.gamma - 1) / (equations.gamma + 1)
+        p_star = p_local +
+                 0.5f0 * v_normal / A *
+                 (v_normal + sqrt(v_normal^2 + 4 * A * (p_local + B)))
+    end
+
+    # For the slip wall we directly set the flux as the normal velocity is zero
+    return SVector(0,
+                   p_star * normal[1],
+                   p_star * normal[2],
+                   0) * norm_
+end

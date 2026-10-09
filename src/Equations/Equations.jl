@@ -13,13 +13,18 @@
 
 The 2D compressible Euler equations.
 
-- Phase 1, copied from Trixi.jl 0.17.13 with its MIT notice: `CompressibleEulerEquations2D`,
-  `prim2cons`, `cons2prim`, `density`, `velocity`, `pressure`, the physical `flux`, the Rusanov
-  flux `flux_lax_friedrichs` with its wave-speed estimates, and `BoundaryConditionDirichlet`. The
-  fluxes take an unnormalized `normal_direction` and scale with its length, so a face's `vector`
-  goes straight in.
-- Phase 1: the reference states [`freestream`](@ref) and [`IsentropicVortex`](@ref).
-- Phase 3: HLLC; the slip wall by mirror state, plus the pressure-only wall flux.
+- Copied from Trixi.jl 0.17.13, with its MIT notice:
+  - the equations and their variables: `CompressibleEulerEquations2D`, `prim2cons`, `cons2prim`,
+    `density`, `velocity` and `pressure`;
+  - the fluxes: the physical `flux`, the Rusanov flux `flux_lax_friedrichs` with its wave-speed
+    estimates (Phase 1), and HLLC, `flux_hllc` (Phase 3);
+  - the boundary conditions: `BoundaryConditionDirichlet`, and `boundary_condition_slip_wall`,
+    the pressure-only wall flux (Phase 3).
+
+  The fluxes take an unnormalized `normal_direction` and scale with its length, so a face's
+  `vector` goes straight in.
+- EulerDG's own: [`boundary_condition_mirror_wall`](@ref), the plan's default slip wall by mirror
+  state (Phase 3); the reference states [`freestream`](@ref) and [`IsentropicVortex`](@ref).
 - Phase 4: the characteristic (Riemann-invariant) farfield, which Trixi does not have.
 """
 module Equations
@@ -28,13 +33,15 @@ using LinearAlgebra: norm
 using StaticArrays: SVector
 
 include("trixi.jl")
+include("walls.jl")
 include("states.jl")
 
 export AbstractEquations, AbstractCompressibleEulerEquations, CompressibleEulerEquations2D
 export nvariables, prim2cons, cons2prim, density, velocity, pressure
 export flux, flux_central, FluxPlusDissipation, DissipationLocalLaxFriedrichs, FluxLaxFriedrichs
-export flux_lax_friedrichs, max_abs_speed, max_abs_speed_naive, max_abs_speeds
-export BoundaryConditionDirichlet
+export flux_lax_friedrichs, flux_hllc, max_abs_speed, max_abs_speed_naive, max_abs_speeds
+export rotate_to_x, rotate_from_x
+export BoundaryConditionDirichlet, boundary_condition_slip_wall, boundary_condition_mirror_wall
 export freestream, IsentropicVortex
 
 end # module Equations

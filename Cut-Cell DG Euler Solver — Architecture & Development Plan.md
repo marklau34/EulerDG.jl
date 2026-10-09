@@ -198,11 +198,13 @@ Phases 1 and 2 are independent and can run in parallel. The circle comes before 
 
 ### Phase 3 · Cut-cell DG and walls
 
-- [ ] Slip wall by mirror state, plus the pressure-only alternative
-- [ ] Local time-step formula, frozen across Runge–Kutta stages
-- [ ] Uniform flow along a straight wall tilted off the grid axes
-- [ ] Manufactured solution on a domain cut by a tilted straight wall
-- [ ] Add the HLLC flux
+- [x] Slip wall by mirror state, plus the pressure-only alternative (Trixi's, with the pressure from the exact 1D Riemann problem)
+- [x] Local time-step formula, frozen across Runge–Kutta stages
+- [x] Uniform flow along a straight wall tilted off the grid axes
+- [x] Manufactured solution on a domain cut by a tilted straight wall
+- [x] Add the HLLC flux
+
+**Gate passed (Oct 8).** The manufactured solution on the unit square cut by a wall at 17° converges at second order with both slip walls and both fluxes: orders 1.98–2.18 on the 16, 32 and 64 grids. Uniform flow along walls at three angles stays uniform under local steps, with slivers down to 1e-12. Regular elements stay within 1.5e-13. A sliver whose wall face is 1e-7 long deviates by up to 2.5e-10, because that face's own direction carries its endpoints' rounding. The explicit solve needs about 2N iterations on an N × N grid.
 
 ### Phase 4 · 2D inviscid circle
 

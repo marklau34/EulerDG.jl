@@ -6,8 +6,18 @@
 # Trixi's fused multiply-adds, so the two agree to round-off rather than bitwise. The script prints
 # the largest relative difference per function over random states and normal directions, and exits
 # with an error above 1e-13.
+#
+# The copies are included on their own, in a module of that name, rather than by loading EulerDG:
+# the check needs nothing else of it, and Trixi's dependency tree cannot be resolved together with
+# the binary packages under EulerDG's geometry stack.
 
-using EulerDG: EulerDG
+module EulerDG
+using LinearAlgebra: norm
+using StaticArrays: SVector
+include(joinpath(@__DIR__, "..", "src", "Equations", "trixi.jl"))
+include(joinpath(@__DIR__, "..", "src", "Equations", "walls.jl"))
+end
+
 using Printf: @printf
 using Random: Xoshiro
 using StaticArrays: SVector
@@ -43,6 +53,14 @@ for _ in 1:10_000
                                    Trixi.max_abs_speeds(u, theirs)),
               "flux_lax_friedrichs" => (EulerDG.flux_lax_friedrichs(u, v, n, ours),
                                         Trixi.flux_lax_friedrichs(u, v, n, theirs)),
+              "flux_hllc" => (EulerDG.flux_hllc(u, v, n, ours), Trixi.flux_hllc(u, v, n, theirs)),
+              "rotate_to_x" => (EulerDG.rotate_to_x(u, n / hypot(n...), ours),
+                                Trixi.rotate_to_x(u, n / hypot(n...), theirs)),
+              "rotate_from_x" => (EulerDG.rotate_from_x(u, n / hypot(n...), ours),
+                                  Trixi.rotate_from_x(u, n / hypot(n...), theirs)),
+              "boundary_condition_slip_wall" =>
+                  (EulerDG.boundary_condition_slip_wall(u, n, x, 0.0, EulerDG.flux_hllc, ours),
+                   Trixi.boundary_condition_slip_wall(u, n, x, 0.0, Trixi.flux_hllc, theirs)),
               "BoundaryConditionDirichlet" =>
                   (bc_ours(u, n, x, 0.0, EulerDG.flux_lax_friedrichs, ours),
                    bc_theirs(u, n, x, 0.0, Trixi.flux_lax_friedrichs, theirs)))

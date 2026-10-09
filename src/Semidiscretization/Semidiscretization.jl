@@ -20,12 +20,13 @@
 The weak-form modal DG right-hand side, P1 on every element.
 
 - [`DGSemidiscretization`](@ref): element and face solver data built from a mesh, with the
-  equations, the surface flux and one boundary condition per named boundary.
-- [`rhs!`](@ref) in four passes: element volume integrals, interior faces, boundary faces (one
-  type-stable loop per boundary), then division by |K|.
+  equations, the surface flux, one boundary condition per named boundary and optional source
+  terms.
+- [`rhs!`](@ref) in four passes: element volume integrals (and sources), interior faces, boundary
+  faces (one type-stable loop per boundary), then division by |K|.
 - [`allocate_state`](@ref), [`project`](@ref), [`evaluate`](@ref), [`cell_average`](@ref).
-- [`max_dt`](@ref), the time step from the plan's local-step formula, and
-  [`assert_positive`](@ref).
+- The plan's step formula: [`local_dt!`](@ref), each element's own step (Phase 3), and
+  [`max_dt`](@ref), the smallest of them. [`assert_positive`](@ref) checks the state.
 """
 module Semidiscretization
 
@@ -36,7 +37,7 @@ using ..Basis: ElementBasis, element_basis, basis_values, basis_gradients
 using ..Equations: cons2prim, flux, flux_lax_friedrichs, max_abs_speed
 
 export DGSemidiscretization, allocate_state, project, evaluate, cell_average, rhs!, max_dt
-export assert_positive
+export local_dt!, assert_positive
 
 """
     DGSemidiscretization{T,M,EQ,SF,BC}
@@ -52,11 +53,12 @@ The P1 DG discretization of `equations` on a `PolygonMesh`, as struct-of-arrays:
 
 Build it with `DGSemidiscretization(mesh, equations; ...)`.
 """
-struct DGSemidiscretization{T,M<:PolygonMesh{T},EQ,SF,BC}
+struct DGSemidiscretization{T,M<:PolygonMesh{T},EQ,SF,BC,ST}
     mesh::M
     equations::EQ
     surface_flux::SF
     boundary_conditions::BC
+    source_terms::ST
     basis::Vector{ElementBasis{T}}
     gradients::Vector{SMatrix{2,3,T,6}}
     mass::Vector{T}
@@ -73,15 +75,19 @@ end
 
 """
     DGSemidiscretization(mesh, equations; surface_flux=flux_lax_friedrichs,
-                         boundary_conditions=(;), volume_degree=2)
+                         boundary_conditions=(;), source_terms=nothing, volume_degree=2)
 
-Build the discretization. `boundary_conditions` is a NamedTuple with one condition per name in
-`mesh.boundary_names`, each called as `bc(u_inner, normal_direction, x, t, surface_flux,
-equations)` like Trixi's. `volume_degree` is the degree of the element rules: 2 by default, 4 to
-over-integrate.
+Build the discretization.
+
+- `boundary_conditions` is a NamedTuple with one condition per name in `mesh.boundary_names`,
+  each called as `bc(u_inner, normal_direction, x, t, surface_flux, equations)` like Trixi's.
+- `source_terms`, if given, is called as `source_terms(u, x, t, equations)` like Trixi's, at every
+  volume quadrature point, and added to the right-hand side. A manufactured solution enters this
+  way.
+- `volume_degree` is the degree of the element rules: 2 by default, 4 to over-integrate.
 """
 function DGSemidiscretization(mesh::PolygonMesh{T}, equations; surface_flux=flux_lax_friedrichs,
-                              boundary_conditions::NamedTuple=(;),
+                              boundary_conditions::NamedTuple=(;), source_terms=nothing,
                               volume_degree::Integer=2) where {T}
     names = mesh.boundary_names
     for name in names
@@ -139,7 +145,7 @@ function DGSemidiscretization(mesh::PolygonMesh{T}, equations; surface_flux=flux
         fphi_right[f] = R == 0 ? (zero(SVector{3,T}), zero(SVector{3,T})) :
                         face_values(basis[R], (pa - basis[R].center) + F.shift[f], d)
     end
-    return DGSemidiscretization(mesh, equations, surface_flux, bcs, basis,
+    return DGSemidiscretization(mesh, equations, surface_flux, bcs, source_terms, basis,
                                 [basis_gradients(b) for b in basis], [b.mass for b in basis],
                                 qptr, qpoint, qweight, qphi, fpoint, fnormal, fphi_left,
                                 fphi_right, zeros(T, ne))
@@ -213,13 +219,14 @@ end
 """
     rhs!(du, u, semi, t) -> du
 
-The DG time derivative of the state `u` at time `t`: element volume integrals, then interior
-faces, then boundary faces, then division by each element's mass. Allocation-free.
+The DG time derivative of the state `u` at time `t`: element volume integrals and source terms,
+then interior faces, then boundary faces, then division by each element's mass. Allocation-free.
 """
 function rhs!(du::AbstractArray{T,3}, u::AbstractArray{T,3}, semi::DGSemidiscretization{T},
               t) where {T}
     fill!(du, zero(T))
     _volume_integrals!(du, u, semi)
+    _source_terms!(du, u, semi, t, semi.source_terms)
     _interior_faces!(du, u, semi)
     _boundary_passes!(du, u, semi, t, semi.boundary_conditions, 1)
     _inverse_mass!(du, semi)
@@ -241,6 +248,20 @@ function _volume_integrals!(du, u, semi::DGSemidiscretization{T}) where {T}
         g = semi.gradients[e]
         _add!(du, 2, e, g[1, 2] * Fx + g[2, 2] * Fy)
         _add!(du, 3, e, g[1, 3] * Fx + g[2, 3] * Fy)
+    end
+    return nothing
+end
+
+# ∫ φ_i S(U, x, t): the source terms, at the volume quadrature points; none by default.
+@inline _source_terms!(du, u, semi::DGSemidiscretization, t, ::Nothing) = nothing
+function _source_terms!(du, u, semi::DGSemidiscretization, t, source)
+    eq = semi.equations
+    @inbounds for e in eachindex(semi.mass), q in semi.qptr[e]:(semi.qptr[e + 1] - 1)
+        φ = semi.qphi[q]
+        S = semi.qweight[q] * source(_value(u, e, φ), semi.qpoint[q], t, eq)
+        for i in 1:3
+            _add!(du, i, e, φ[i] * S)
+        end
     end
     return nothing
 end
@@ -297,17 +318,10 @@ end
 # =====================================
 # Time step and positivity
 
-"""
-    max_dt(u, semi; cfl) -> T
-
-The global time step: the smallest over the elements of the plan's local step
-
-    Δt_K = cfl |K| / ((2p + 1) Σ_f λ_f |f|),   λ_f = max over the face's Gauss points and both
-                                               sides of |v · n| + c
-
-with p = 1. The face sum includes boundary faces.
-"""
-function max_dt(u, semi::DGSemidiscretization{T}; cfl) where {T}
+# Each element's `Σ_f λ_f |f|`, into `semi.speed`, with `λ_f` the largest `|v · n| + c` over the
+# face's Gauss points and both its sides. Boundary faces count too: a thin sliver along a long wall
+# face gets a step that scales with its thickness.
+function _face_speeds!(u, semi::DGSemidiscretization{T}) where {T}
     speed, F, eq = semi.speed, semi.mesh.faces, semi.equations
     fill!(speed, zero(T))
     @inbounds for f in eachindex(semi.fnormal)
@@ -321,6 +335,34 @@ function max_dt(u, semi::DGSemidiscretization{T}; cfl) where {T}
         speed[L] += λ * F.length[f]
         R == 0 || (speed[R] += λ * F.length[f])
     end
+    return speed
+end
+
+"""
+    local_dt!(dt, u, semi; cfl) -> dt
+
+Each element's own step, the plan's local-step formula with p = 1:
+
+    Δt_K = cfl |K| / ((2p + 1) Σ_f λ_f |f|),   λ_f = max over the face's Gauss points and both
+                                               sides of |v · n| + c
+
+The face sum includes boundary faces. Allocation-free.
+"""
+function local_dt!(dt::AbstractVector, u, semi::DGSemidiscretization; cfl)
+    speed = _face_speeds!(u, semi)
+    @inbounds for e in eachindex(speed)
+        dt[e] = cfl * semi.mass[e] / (3 * speed[e])
+    end
+    return dt
+end
+
+"""
+    max_dt(u, semi; cfl) -> T
+
+The global time step: the smallest of the elements' [`local_dt!`](@ref) steps.
+"""
+function max_dt(u, semi::DGSemidiscretization{T}; cfl) where {T}
+    speed = _face_speeds!(u, semi)
     dt = typemax(T)
     @inbounds for e in eachindex(speed)
         dt = min(dt, semi.mass[e] / (3 * speed[e]))

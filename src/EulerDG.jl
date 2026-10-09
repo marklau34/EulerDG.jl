@@ -62,17 +62,19 @@ export VF_BINS, mesh_summary, mesh_report, write_mesh_vtk
 # would collide with Meshes.jl's; reach them as `EulerDG.Basis` and so on.
 export Body, polygon_body, circle_points, naca4_points, polygon_perimeter, grid_shifts
 export sliver_shift
-export uncut_mesh, cut_mesh, cut_report
+export uncut_mesh, cut_mesh, cut_report, halfplane_mesh
 export GAUSS2, GAUSS3, TRIANGLE3, TRIANGLE6, triangulate, polygon_rule
 export ElementBasis, element_basis, basis_values, basis_gradients, mass_matrix
 export AbstractEquations, AbstractCompressibleEulerEquations, CompressibleEulerEquations2D
 export nvariables, prim2cons, cons2prim, density, velocity, pressure
 export flux, flux_central, FluxPlusDissipation, DissipationLocalLaxFriedrichs, FluxLaxFriedrichs
-export flux_lax_friedrichs, max_abs_speed, max_abs_speed_naive, max_abs_speeds
-export BoundaryConditionDirichlet, freestream, IsentropicVortex
+export flux_lax_friedrichs, flux_hllc, max_abs_speed, max_abs_speed_naive, max_abs_speeds
+export rotate_to_x, rotate_from_x
+export BoundaryConditionDirichlet, boundary_condition_slip_wall, boundary_condition_mirror_wall
+export freestream, IsentropicVortex
 export DGSemidiscretization, allocate_state, project, evaluate, cell_average, rhs!, max_dt
-export assert_positive
-export SSPRK3Cache, ssprk3_step!, integrate!
+export local_dt!, assert_positive
+export SSPRK3Cache, ssprk3_step!, integrate!, residual_norms, solve_steady!
 export l2_error, write_solution_vtk
 
 end # module EulerDG

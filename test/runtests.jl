@@ -11,6 +11,7 @@ const TIER = isempty(ARGS) ? get(ENV, "EULERDG_TEST_TIER", "commit") : first(ARG
 TIER in ("commit", "scheduled") || error("unknown test tier \"$TIER\"; use commit or scheduled")
 
 include("fixtures.jl")
+include("flows.jl")
 
 @testset "EulerDG ($TIER tier)" begin
     include("test_geometry.jl")
@@ -26,8 +27,10 @@ include("fixtures.jl")
     include("test_post.jl")
     include("test_bodies.jl")
     include("test_cut.jl")
+    include("test_walls.jl")
     if TIER == "scheduled"
         include("scheduled/test_phase1_gate.jl")
         include("scheduled/test_phase2_gate.jl")
+        include("scheduled/test_phase3_gate.jl")
     end
 end
