@@ -208,12 +208,18 @@ Phases 1 and 2 are independent and can run in parallel. The circle comes before 
 
 ### Phase 4 · 2D inviscid circle
 
-- [ ] Run-configuration format, moved from Phase 0 (Oct 8); the grid-shift sweep is its first user
-- [ ] Characteristic farfield boundary
-- [ ] Convergence monitors: L2 and maximum residual with its location
-- [ ] Subsonic inviscid circle at M = 0.3, below the circle's critical Mach number
-- [ ] Grid-shift sweep on each grid, logging minimum volume fraction, iterations and entropy error
-- [ ] Decide from the sweep whether safeguard rungs 2 and 3 are needed
+- [ ] Run-configuration format, moved from Phase 0 (Oct 8); the grid-shift sweep is its first user. Not built yet: the low-resolution sweep uses keyword arguments.
+- [x] Characteristic farfield boundary
+- [x] Convergence monitors: L2 and maximum residual with its location, plus a CSV run log
+- [x] Subsonic inviscid circle at M = 0.3, below the circle's critical Mach number, at low resolution (8 and 16 cells per diameter)
+- [x] Grid-shift sweep at 8 cells per diameter, logging minimum volume fraction, iterations and entropy error
+- [x] Decide from the sweep whether safeguard rungs 2 and 3 are needed: not at this resolution, since slivers to 1e-12 converge in the usual number of iterations
+
+**Low-resolution gate passed (Oct 8).** At 8 and 16 cells per diameter, on [−3, 3]² with the degree-4 volume rules, both grids converge 10 orders. Lift (≤ 1.5e-7) and the Cp asymmetry (≤ 2.3e-7) are zero but for the triangulation of mirrored fragments. Spurious drag falls at order 1.89, the entropy error at 2.08 and the entropy wake at 2.47. Not yet met:
+
+- The stagnation Cp is 1.11 against 1.023, from the far boundary at 6 radii; it scales like (R/L)².
+- On shifted grids the lift reaches ±0.16 at 8 cells per diameter, because the under-resolved wake is asymmetric.
+- Meeting the full gate needs finer grids and a larger domain. That waits for a decision on resolution, the implicit solver and stretched grids.
 
 **Circle gate.** The inviscid circle has no circulation and no wake, so any lift, drag or asymmetry is numerical error. All of these must hold on every grid and every grid shift:
 

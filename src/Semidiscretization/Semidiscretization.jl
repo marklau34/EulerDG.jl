@@ -37,7 +37,7 @@ using ..Basis: ElementBasis, element_basis, basis_values, basis_gradients
 using ..Equations: cons2prim, flux, flux_lax_friedrichs, max_abs_speed
 
 export DGSemidiscretization, allocate_state, project, evaluate, cell_average, rhs!, max_dt
-export local_dt!, assert_positive
+export local_dt!, assert_positive, face_trace
 
 """
     DGSemidiscretization{T,M,EQ,SF,BC}
@@ -191,6 +191,16 @@ The state of element `e` at the point `x`, or at the point `origin + x`.
     _value(u, e, basis_values(semi.basis[e], x))
 @inline evaluate(semi::DGSemidiscretization, u, e, x, origin) =
     _value(u, e, basis_values(semi.basis[e], x, origin))
+
+"""
+    face_trace(semi, u, f, q) -> SVector{4}
+
+The state of face `f`'s left element at the face's Gauss point `q` (1 or 2): the interior trace
+on a boundary face. The point is `semi.fpoint[f][q]`, and its weight times the face vector is
+`semi.fnormal[f][q]`.
+"""
+@inline face_trace(semi::DGSemidiscretization, u, f, q) =
+    _value(u, semi.mesh.faces.left[f], semi.fphi_left[f][q])
 
 """
     project(f, semi, t=0; degree=4) -> Array{T,3}

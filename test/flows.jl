@@ -100,3 +100,53 @@ function wall_aligned_deviation(m, θ; wall, surface_flux, iterations=300)
     big = m.elements.volume_fraction .>= 1e-6
     return (; regular=maximum(dev[big]), scaled, all=maximum(dev))
 end
+
+# The inviscid circle of diameter 1 at Mach 0.3, centred on a grid line of a uniform grid over
+# [-L, L]^2 with `cpd` cells per diameter, moved by `shift` (in cells): HLLC, the mirror wall and
+# the characteristic farfield, marched to a steady state from the freestream.
+function solve_circle(cpd; L=3.0, shift=(0.0, 0.0), gap=nothing, volume_degree=4, tol=1e-10)
+    eq = CompressibleEulerEquations2D(1.4)
+    uinf = freestream(eq; mach=0.3)
+    g = CartesianGrid(Float64; mincorner=(-L, -L), maxcorner=(L, L), n=(round(Int, 2L * cpd), round(Int, 2L * cpd)))
+    pts = circle_points(; radius=0.5, h=minimum(g.d))
+    s = gap === nothing ? SVector(shift) .* g.d :
+        sliver_shift(polygon_body(pts), grid_nodes(g); gap=gap * minimum(g.d))
+    c = cut_mesh(g, polygon_body(pts .+ Ref(s); name="circle"))
+    m = c.mesh
+    semi = DGSemidiscretization(m, eq; surface_flux=flux_hllc, volume_degree,
+                                boundary_conditions=wall_conditions(m, boundary_condition_mirror_wall,
+                                                                    BoundaryConditionFarfield(uinf)))
+    u = project((x, t, eq) -> uinf, semi)
+    t = @elapsed r = solve_steady!(u, semi; tol, maxiter=400_000)
+    return (; mesh=m, semi, u, uinf, run=r, seconds=t, center=s, minvf=c.report.min_volume_fraction,
+            forces=wall_forces(semi, u, uinf; length=1, point=s), cp=surface_cp(semi, u, uinf),
+            entropy=entropy_error(semi, u, uinf))
+end
+
+# The largest difference in Cp between wall Gauss points mirrored across the circle's horizontal
+# axis, over the points whose mirror image is also a Gauss point.
+function cp_mirror_asymmetry(c)
+    x, cp = c.cp.x, c.cp.cp
+    yc = c.center[2]
+    index = Dict(round.((p[1], p[2] - yc); digits=10) => k for (k, p) in enumerate(x))
+    worst = 0.0
+    for (k, p) in enumerate(x)
+        j = get(index, round.((p[1], yc - p[2]); digits=10), 0)
+        j == 0 || (worst = max(worst, abs(cp[k] - cp[j])))
+    end
+    return worst
+end
+
+# The mean entropy error, in cell averages, over the wake: one to three diameters behind the
+# circle's centre, within half a diameter of its axis.
+function wake_entropy(c)
+    eq = c.semi.equations
+    s∞ = pressure(c.uinf, eq) / c.uinf[1]^eq.gamma
+    E = [e for e in 1:nelements(c.mesh)
+         if 1 < c.mesh.elements.centroid[e][1] - c.center[1] < 3 &&
+            abs(c.mesh.elements.centroid[e][2] - c.center[2]) < 0.5]
+    return sum(abs(begin
+                       ρ, _, _, p = cons2prim(cell_average(c.u, e), eq)
+                       (p / ρ^eq.gamma - s∞) / s∞
+                   end) for e in E) / length(E)
+end

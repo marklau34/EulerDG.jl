@@ -25,7 +25,8 @@ The 2D compressible Euler equations.
   `vector` goes straight in.
 - EulerDG's own: [`boundary_condition_mirror_wall`](@ref), the plan's default slip wall by mirror
   state (Phase 3); the reference states [`freestream`](@ref) and [`IsentropicVortex`](@ref).
-- Phase 4: the characteristic (Riemann-invariant) farfield, which Trixi does not have.
+- Phase 4: [`BoundaryConditionFarfield`](@ref), the characteristic (Riemann-invariant) farfield,
+  which Trixi does not have.
 """
 module Equations
 
@@ -34,6 +35,7 @@ using StaticArrays: SVector
 
 include("trixi.jl")
 include("walls.jl")
+include("farfield.jl")
 include("states.jl")
 
 export AbstractEquations, AbstractCompressibleEulerEquations, CompressibleEulerEquations2D
@@ -42,6 +44,7 @@ export flux, flux_central, FluxPlusDissipation, DissipationLocalLaxFriedrichs, F
 export flux_lax_friedrichs, flux_hllc, max_abs_speed, max_abs_speed_naive, max_abs_speeds
 export rotate_to_x, rotate_from_x
 export BoundaryConditionDirichlet, boundary_condition_slip_wall, boundary_condition_mirror_wall
+export BoundaryConditionFarfield
 export freestream, IsentropicVortex
 
 end # module Equations

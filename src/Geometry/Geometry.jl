@@ -89,11 +89,19 @@ end
 
 The regular `n`-gon inscribed in the circle, counter-clockwise from angle 0. Give either `n`, or
 the cell size `h`, for `per_cell` segments per cell along the circumference.
+
+The lower half mirrors the upper half bitwise, so a circle centred on a grid line is exactly
+symmetric across it, and so is the cut mesh, to round-off: a symmetric flow then has zero lift to
+round-off.
 """
 function circle_points(; center=(0.0, 0.0), radius, n=nothing, h=nothing, per_cell=4)
     m = _segments(2π * radius, n, h, per_cell)
     c = PV(center)
-    return [c + radius * PV(cospi(2k / m), sinpi(2k / m)) for k in 0:(m - 1)]
+    q = [PV(cospi(2k / m), sinpi(2k / m)) for k in 0:(m - 1)]
+    for k in (m ÷ 2 + 1):(m - 1)
+        q[k + 1] = PV(q[m - k + 1][1], -q[m - k + 1][2])
+    end
+    return [c + radius * p for p in q]
 end
 
 """

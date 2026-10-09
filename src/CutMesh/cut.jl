@@ -8,8 +8,11 @@
 #   the edge, and walks each cell in local coordinates from its lower corner. A loop point is that
 #   corner plus the local offset, so the two cells sharing an edge compute the same coordinate along
 #   the edge, but the edge line's own coordinate (`lo + h`) can differ from the node value in the
-#   last bit. Snapping every loop coordinate within round-off of the cell's node lines onto them
-#   makes shared points bitwise equal, so they become one pool vertex.
+#   last bit. Every loop point within round-off of one of the cell's perimeter points -- the ends of
+#   its fluid intervals, built canonically from the node coordinates and the cutter's offsets -- is
+#   replaced by it, so shared points are bitwise equal and become one pool vertex. A body vertex
+#   within round-off of a crossing merges into the crossing; any other body vertex stays exactly as
+#   the cutter placed it, even an ulp from a grid line.
 # - **Naming.** A loop edge that does not run along a side of its cell is a piece of the body: a
 #   wall. A loop edge along a side pairs with the neighbour's, except where a dropped sliver's
 #   interval was closed (the cutter closes it on both sides, moving the wall to the fluid
@@ -95,9 +98,9 @@ function cut_mesh(grid::CartesianGrid{2,Float64}, body::Body; drop_area::Real=1e
         area = (hi[1] - lo[1]) * (hi[2] - lo[2])
         st = info[ci].status
         if haskey(byc, ci)
+            perimeter = _perimeter_points(cache, ci, lo, hi)
             for l in sort(byc[ci]; by=l -> l.region)
-                ids = _dedupe!([id!(PV(_snap(q[1], lo[1], hi[1]), _snap(q[2], lo[2], hi[2])))
-                                for q in l.points])
+                ids = _dedupe!([id!(_canonical(q, perimeter, lo, hi)) for q in l.points])
                 problem = _polygon_problem(points, ids)
                 problem === nothing ||
                     throw(ArgumentError("cell $(Tuple(ci)), fragment $(l.region): $problem"))
@@ -128,6 +131,26 @@ function _arc_ends(lo, hi, dir, s0, s1)
            dir == 3 ? PV(_snap(lo[1] + s, lo[1], hi[1]), lo[2]) :
                       PV(_snap(lo[1] + s, lo[1], hi[1]), hi[2])
     return P(s0), P(s1)
+end
+
+# The canonical ends of every fluid interval on cut cell `ci`'s edges: its crossings and fluid
+# corners, as the neighbours sharing those edges compute them too.
+function _perimeter_points(cache, ci, lo, hi)
+    out = PV[]
+    for a in CutCellMethods.arcs(cache, ci)
+        p0, p1 = _arc_ends(lo, hi, Int(a.dir), a.s0, a.s1)
+        push!(out, p0, p1)
+    end
+    return out
+end
+
+# A loop point, canonical: the perimeter point it is within round-off of, or else itself.
+function _canonical(q, perimeter, lo, hi)
+    tol = 8 * eps(max(maximum(abs, lo), maximum(abs, hi)))
+    for p in perimeter
+        abs(q[1] - p[1]) <= tol && abs(q[2] - p[2]) <= tol && return p
+    end
+    return PV(q)
 end
 
 # Drop consecutive repeats, the last against the first too: a body vertex on a grid line is also a

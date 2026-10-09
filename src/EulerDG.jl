@@ -71,10 +71,11 @@ export flux, flux_central, FluxPlusDissipation, DissipationLocalLaxFriedrichs, F
 export flux_lax_friedrichs, flux_hllc, max_abs_speed, max_abs_speed_naive, max_abs_speeds
 export rotate_to_x, rotate_from_x
 export BoundaryConditionDirichlet, boundary_condition_slip_wall, boundary_condition_mirror_wall
+export BoundaryConditionFarfield
 export freestream, IsentropicVortex
 export DGSemidiscretization, allocate_state, project, evaluate, cell_average, rhs!, max_dt
-export local_dt!, assert_positive
+export local_dt!, assert_positive, face_trace
 export SSPRK3Cache, ssprk3_step!, integrate!, residual_norms, solve_steady!
-export l2_error, write_solution_vtk
+export l2_error, entropy_error, wall_forces, surface_cp, RunLog, write_solution_vtk
 
 end # module EulerDG
