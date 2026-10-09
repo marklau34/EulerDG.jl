@@ -243,7 +243,16 @@ Phases 1 and 2 are independent and can run in parallel. The circle comes before 
   - the stagnation Cp is within 0.2% of isentropic without extrapolation;
   - lift is round-off.
 
-  The explicit solve takes up to 5x more iterations on the larger domain. The nested order study at 32 and 64 cells per diameter is still to run.
+  The explicit solve takes up to 5x more iterations on the larger domain.
+- **Nested order study (Oct 9, `buffer=8`), 8, 16 and 32 cells per diameter; 64 skipped by decision:**
+  - all three converge 10 orders;
+  - lift and top-bottom asymmetry stay at round-off;
+  - the fore-aft asymmetry falls at orders 1.18 and 1.83;
+  - the stagnation Cp is within 0.2% on every grid;
+  - entropy L2 falls at orders 2.25 and 2.38;
+  - the wake falls at order 2.51 (1.19e-4 at 32, just above the 1e-4 threshold).
+
+  The drag crosses zero between 8 and 16 (+3.0e-2, -6.4e-4, -2.9e-3), so its order is not settled without the 64-cell grid. The shift sweep's lift (2b) is the remaining open criterion, which the far boundary does not affect.
 
 **Circle gate.** The inviscid circle has no circulation and no wake, so any lift, drag or asymmetry is numerical error. As restated on Oct 9, since a shifted grid is not symmetric and its asymmetry is discretization error, not round-off:
 

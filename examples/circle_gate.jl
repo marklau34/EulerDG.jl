@@ -1,8 +1,9 @@
 # =====================================
 # The Phase 4 circle gate at full resolution
 #
-# Run with `julia --project=examples -t auto examples/circle_gate.jl [sets...]`, with sets from A,
-# B, C, N (default: A, B and C, then the summary) or `summary` alone. Each run is saved to
+# Run with `julia --project=examples -t auto examples/circle_gate.jl [sets...] [cells...]`, with
+# sets from A, B, C, N (default: A, B and C, then the summary) or `summary` alone, and optionally
+# the cells per diameter to run, such as `N 8 16 32`. Each run is saved to
 # out/circle_gate/ as it finishes, with its state, metrics, run log and, on unshifted grids, a VTK
 # file; a rerun skips the runs already saved, so the study can be stopped and resumed.
 #
@@ -52,7 +53,7 @@ const GAPS = [(; tag=@sprintf("gap%.0e", g), shift=(0.0, 0.0), gap=g, nested=fal
               for g in (1e-3, 1e-6, 1e-8)]
 const SYMMETRIC = (; tag="sym", shift=(0.0, 0.0), gap=nothing, nested=false)
 # The nested far field (Oct 9): a finest box 1.5 diameters round the centre and 3.5 behind it,
-# wrapped in coarser levels out to 70 radii or more, 16 cells to a ring, aligned to the centre.
+# wrapped in coarser levels out to 70 radii or more, 8 cells to a ring, aligned to the centre.
 const NESTED = (; tag="nested", shift=(0.0, 0.0), gap=nothing, nested=true)
 
 run_key(cpd, L, p) = "d$(cpd)_L$(L)_$(p.tag)"
@@ -81,7 +82,7 @@ end
 function setup_nested(cpd, L)
     g = CartesianGrid(Float64; mincorner=(-1.5, -1.5), maxcorner=(3.5, 1.5), n=(5cpd, 3cpd))
     body = polygon_body(circle_points(; radius=0.5, h=minimum(g.d)); name="circle")
-    cut = nested_cut_mesh(g, body; farfield=((-L, -L), (L, L)), buffer=16, origin=(0.0, 0.0))
+    cut = nested_cut_mesh(g, body; farfield=((-L, -L), (L, L)), buffer=8, origin=(0.0, 0.0))
     return discretize(cut, PV(0, 0))
 end
 
@@ -287,12 +288,16 @@ end
 
 # =====================================
 
-sets = isempty(ARGS) ? ["A", "B", "C"] : uppercase.(ARGS)
+# Numbers among the arguments pick the cells per diameter to run: `N 8 16 32` skips N's 64.
+cpds = [parse(Int, a) for a in ARGS if all(isdigit, a)]
+setnames = uppercase.(filter(a -> !all(isdigit, a), ARGS))
+sets = isempty(setnames) ? ["A", "B", "C"] : setnames
 @printf("%d threads; output in %s\n", Threads.nthreads(), OUT)
 for set in filter(!=("SUMMARY"), sets)
     println("Set ", set, ":")
     # Within a set, the 64-cell grid last: it is the longest run by far.
     for (cpd, L, p) in sort(runs(set); by=r -> r[1] == 64)
+        isempty(cpds) || cpd in cpds || continue
         run_case(cpd, L, p)
     end
 end

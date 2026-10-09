@@ -18,7 +18,7 @@
 #   box's edge, so no cut reaches a coarse-fine interface.
 
 """
-    nested_cut_mesh(grid, body; farfield, buffer=16, origin=grid's lower corner, drop_area=1e-12)
+    nested_cut_mesh(grid, body; farfield, buffer=8, origin=grid's lower corner, drop_area=1e-12)
         -> (; mesh, report, hierarchy)
 
 Cut `body` on the uniform 2D `grid`, as [`cut_mesh`](@ref) does, and wrap the grid's box in coarser
@@ -42,7 +42,7 @@ corners, and `levels`: for each level, coarsest first, its `level`, cell size `h
 `elements`. `hierarchy` is the CartesianMeshes `CartesianGridHierarchy` of the levels.
 """
 function nested_cut_mesh(grid::CartesianGrid{2,Float64}, body::Body; farfield,
-                         buffer::Integer=16, origin=grid.x0, drop_area::Real=1e-12)
+                         buffer::Integer=8, origin=grid.x0, drop_area::Real=1e-12)
     all(iseven, grid.n) ||
         throw(ArgumentError("the grid has $(grid.n) cells; the nested builder needs an even " *
                             "number along each axis, so that it is made of whole coarser cells"))

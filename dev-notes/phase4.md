@@ -218,7 +218,7 @@ At 32 cells per diameter the residuals stopped between 1.7e-10 and 6.6e-8.
 The far boundary was settled as option 3: `nested_cut_mesh`. The body is cut on a uniform finest
 box by the same polyline clipping as before. The box is wrapped in a CartesianMeshes `NestedGrids`
 chain of coarser levels out to the far field, each level doubling the cell size, each ring at least
-`buffer` (16) of its own cells thick.
+`buffer` of its own cells thick: 16 for the first runs below, then 8 by default.
 
 How it is built:
 
@@ -257,5 +257,45 @@ NACA 0012 at M 0.5 and 1.25 degrees, with the far boundary at 50 chords or more
 The thin-airfoil estimate with the compressibility correction is about 0.158. At 32 cells per
 chord the rings hold 20,800 of the 28,100 elements, so a thinner `buffer` would halve their cost.
 
-`examples/circle_gate.jl` has the nested order study as set N (8 to 64 cells per diameter). Only
-8 and 16 have been run, by hand. 32 and 64 are estimated at 20 minutes and 1.5 hours.
+**The ring thickness.** The default `buffer` was then lowered from 16 to 8. Accuracy is unchanged,
+and so are the iterations. The mesh at 8 cells per diameter goes from 11,620 elements to 4,996,
+and at 16 from 19,392 to 9,818.
+
+| Cells per diameter | buffer | Elements | Iterations | Time | cd | Stagnation Cp |
+| --- | --- | --- | --- | --- | --- | --- |
+| 8 | 16 | 11,620 | 42,855 | 86 s | 2.99e-2 | 1.0246 |
+| 8 | 8 | 4,996 | 50,987 | 68 s | 3.02e-2 | 1.0245 |
+| 16 | 16 | 19,392 | 108,986 | 328 s | -6.8e-4 | 1.0209 |
+| 16 | 8 | 9,818 | 105,979 | 209 s | -6.4e-4 | 1.0206 |
+
+**The nested order study (set N, `buffer=8`).** Run at 8, 16 and 32 cells per diameter; 64 was
+skipped by decision.
+
+| Cells per diameter | Elements | Iterations | cl | Top-bottom | Fore-aft (order) | cd | Entropy L2 (order) | Wake (order) | Stagnation Cp | Rear Cp |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 8 | 4,996 | 50,987 | -8.2e-8 | 1.2e-7 | 0.69 | +3.02e-2 | 2.29e-2 | 3.86e-3 | 1.0245 (+0.18%) | 0.433 |
+| 16 | 9,818 | 105,979 | -4.0e-9 | 5.8e-9 | 0.30 (1.18) | -6.4e-4 | 4.83e-3 (2.25) | 6.80e-4 (2.51) | 1.0206 (-0.20%) | 0.786 |
+| 32 | 23,374 | 327,264 | -4.1e-9 | 5.6e-9 | 0.085 (1.83) | -2.91e-3 | 9.29e-4 (2.38) | 1.19e-4 (2.51) | 1.0214 (-0.13%) | 0.937 |
+
+The 32-cell run took 21 minutes. The entropy L2 integrates over the whole domain, wake included,
+so it is larger than at 6 radii; its order is what counts.
+
+**Against the gate, on this mesh:**
+
+| Criterion | Result |
+| --- | --- |
+| 1. Converge 10 orders | Met on all three runs |
+| 2a. Symmetric lift and top-bottom asymmetry at round-off | Met: at most 8.2e-8 and 1.2e-7 |
+| 3. Fore-aft asymmetry falls with h | Met: orders 1.18 and 1.83 |
+| 4. Stagnation Cp within 0.5% | Met on every grid, directly: +0.18%, -0.20%, -0.13% |
+| 5. Entropy L2 at about second order | Met: 2.25, 2.38 |
+| 5. Drag at about second order | Not settled. It crosses zero between 8 and 16, so the first error term changes sign there, and three grids cannot give an order |
+| 6. Wake at about second order, below 1e-4 at the finest | Order met (2.51, 2.51). The threshold is narrowly missed at 32 cells per diameter (1.19e-4); at 6 radii, 64 reached 2.1e-5 |
+
+**An estimate for the drag.** The 6-radius series is the farfield floor plus the grid's error. If
+the floor does not depend on h, the change from 32 to 64 there (-2.1e-3) is the grid's alone. That
+puts the nested drag at 64 near -0.0008, an order of about 1.9 from 32. The estimate rests on that
+assumption; a 64-cell nested run would settle it.
+
+Not rerun on this mesh: the shift sweep (criterion 2b), whose problem is the circulation, not the
+far boundary.
