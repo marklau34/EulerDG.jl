@@ -62,7 +62,7 @@ export VF_BINS, mesh_summary, mesh_report, write_mesh_vtk
 # would collide with Meshes.jl's; reach them as `EulerDG.Basis` and so on.
 export Body, polygon_body, circle_points, naca4_points, polygon_perimeter, grid_shifts
 export sliver_shift
-export uncut_mesh, cut_mesh, cut_report, halfplane_mesh
+export uncut_mesh, cut_mesh, cut_report, halfplane_mesh, nested_cut_mesh
 export GAUSS2, GAUSS3, TRIANGLE3, TRIANGLE6, triangulate, polygon_rule
 export ElementBasis, element_basis, basis_values, basis_gradients, mass_matrix
 export AbstractEquations, AbstractCompressibleEulerEquations, CompressibleEulerEquations2D

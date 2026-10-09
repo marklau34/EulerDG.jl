@@ -3,16 +3,16 @@
 #
 # Run with `julia --project=examples -t auto examples/naca0012_flow.jl [cells_per_chord] [mach]
 # [alpha_deg]` (default 16, 0.5 and 1.25). Cuts a uniform grid round NACA 0012 with a sharp
-# trailing edge, from 3 chords ahead of the leading edge to 4 behind the trailing edge and 3.5
-# above and below, and marches the P1 DG discretization to a steady state with local steps --
-# HLLC, the mirror-state slip wall and the characteristic farfield. Writes to out/naca0012_flow/:
+# trailing edge, from a chord ahead of the leading edge to 1.5 behind the trailing edge and a chord
+# above and below, wraps it in coarser levels out to 50 chords or more (`nested_cut_mesh`), and
+# marches the P1 DG discretization to a steady state with local steps -- HLLC, the mirror-state
+# slip wall and the characteristic farfield. Writes to out/naca0012_flow/:
 #
 # - `*_run.csv`, the run log: residual and force histories, the moment about the quarter chord;
 # - `*_cp.csv`, the surface pressure coefficient at every wall Gauss point, with x/c and the side;
 # - `*_solution.vtp`, the cell averages with Cp and the entropy error, for ParaView.
 #
-# This is a first look, not Phase 5's validation. The far boundary is only a few chords away with
-# no point-vortex correction, which takes lift, and the leading-edge radius of 1.6% chord spans a
+# This is a first look, not Phase 5's validation: the leading-edge radius of 1.6% chord spans a
 # fraction of a cell, so the nose makes spurious entropy.
 
 using EulerDG
@@ -34,13 +34,16 @@ te = points[1]
 le = points[argmax([sum(abs2, p - te) for p in points])]
 quarter = le + 0.25 * (te - le)
 
-# The grid, with the trailing edge 0.3 h into its cell and on the middle line of its row.
-mx, my = round(Int, (te[1] - le[1] + 3) / h), round(Int, 3.5 / h)
+# The finest grid, with the trailing edge 0.3 h into its cell and on the middle line of its row, and
+# an even number of cells each way, as the nested builder needs.
+mx, my = round(Int, (te[1] - le[1] + 1) / h), round(Int, 1 / h)
 x0, y0 = te[1] - 0.3h - mx * h, te[2] - 0.5h - my * h
-nx, ny = mx + round(Int, 4 / h), 2my + 1
+nx, ny = mx + round(Int, 1.5 / h), 2my + 2
+nx += isodd(nx)
 grid = CartesianGrid(Float64; mincorner=(x0, y0), maxcorner=(x0 + nx * h, y0 + ny * h),
                      n=(nx, ny))
-cut = cut_mesh(grid, polygon_body(points; name="naca0012"))
+cut = nested_cut_mesh(grid, polygon_body(points; name="naca0012");
+                      farfield=((-50.0, -50.0), (50.0, 50.0)))
 cut_report(cut)
 mesh = cut.mesh
 

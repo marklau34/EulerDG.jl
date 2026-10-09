@@ -4,7 +4,7 @@ Companion to the plan's Phase 4 checklist. By decision on Oct 8, 2026, this phas
 resolution only: no implicit solver yet, and no high-resolution case without a fresh decision.
 Part 1 records the choices and findings, part 2 the gate results, and part 3 the decisions that
 were open after them. Part 4 is the full-resolution study of Oct 9, run against the restated gate,
-and part 5 the decisions it leaves.
+part 5 the decisions it leaves, and part 6 the nested far field built to settle the first of them.
 
 New code:
 
@@ -212,3 +212,50 @@ At 32 cells per diameter the residuals stopped between 1.7e-10 and 6.6e-8.
   explicit steps and probably the implicit solver.
 - **The iteration cap.** At 32 cells per diameter the shifted runs need about 600,000 iterations
   to converge 10 orders, with the lift settled to about 1e-4 well before then.
+
+## 6. The nested far field (Oct 9)
+
+The far boundary was settled as option 3: `nested_cut_mesh`. The body is cut on a uniform finest
+box by the same polyline clipping as before. The box is wrapped in a CartesianMeshes `NestedGrids`
+chain of coarser levels out to the far field, each level doubling the cell size, each ring at least
+`buffer` (16) of its own cells thick.
+
+How it is built:
+
+- **Hanging nodes.** A coarse cell meeting finer cells takes their shared node as a vertex on its
+  side, so the contract's builder pairs the faces as usual.
+- **One formula for every vertex.** Every vertex is a finest-level node, placed by the finest
+  patch's own `get_node`, so vertices shared between levels are bitwise one point.
+- **Quadrature.** `_is_box` now accepts rectangles with collinear vertices, so coarse cells keep
+  the tensor Gauss rule.
+- **Symmetry.** An `origin` keyword aligns every level's cells to a point. Without it the lattice
+  hangs off the finest box's corner and the rings are not symmetric about the circle's axis. That
+  gave lift of 1e-6 and, at 16 cells per diameter, 144,000 iterations instead of 109,000.
+
+The circle at M 0.3, far boundary at 70 radii or more (the domain came out at about 125 radii),
+centred on the origin:
+
+| Cells per diameter | Elements | Iterations | cl | cd | Stagnation Cp | Rear Cp |
+| --- | --- | --- | --- | --- | --- | --- |
+| 8 | 11,620 | 42,855 | -8.2e-8 | 2.99e-2 | 1.0246 (+0.19%) | 0.434 |
+| 16 | 19,392 | 108,986 | -4.1e-9 | -6.8e-4 | 1.0209 (-0.17%) | 0.787 |
+
+- **The drag floor is gone.** At 16 cells per diameter cd is -6.8e-4, against 1.48e-2 at 6 radii.
+- **Stagnation Cp needs no extrapolation.** It is within 0.2% of isentropic on both grids.
+- **Lift is round-off again.**
+- **Convergence is slower.** The iterations grow 1.6x at 8 cells per diameter and 5.4x at 16 over
+  the 6-radius domain. The close boundary probably damped a slow mode that the far one does not.
+
+NACA 0012 at M 0.5 and 1.25 degrees, with the far boundary at 50 chords or more
+(`examples/naca0012_flow.jl`):
+
+| Cells per chord | Elements | Iterations | cl | cl at 3.5 chords |
+| --- | --- | --- | --- | --- |
+| 16 | 16,515 | 81,912 | 0.1188 | 0.1149 |
+| 32 | 28,079 | 215,983 | 0.1593 | 0.1487 |
+
+The thin-airfoil estimate with the compressibility correction is about 0.158. At 32 cells per
+chord the rings hold 20,800 of the 28,100 elements, so a thinner `buffer` would halve their cost.
+
+`examples/circle_gate.jl` has the nested order study as set N (8 to 64 cells per diameter). Only
+8 and 16 have been run, by hand. 32 and 64 are estimated at 20 minutes and 1.5 hours.

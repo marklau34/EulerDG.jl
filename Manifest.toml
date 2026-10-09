@@ -2,7 +2,7 @@
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "c8595f4e2b5821939a8bef79e63c5b0f586bad44"
+project_hash = "88f17bb315cde775a474a4f75545495ce866e170"
 
 [[deps.ADTypes]]
 deps = ["PrecompileTools"]
@@ -168,9 +168,9 @@ version = "1.18.8+0"
 
 [[deps.CartesianMeshes]]
 deps = ["Adapt", "KernelAbstractions", "LinearAlgebra", "Polyester", "Printf", "RecipesBase", "Reexport", "StaticArrays", "UnPack", "WriteVTK"]
-git-tree-sha1 = "175eb809f1fdbb99ade38f97fe878863186ddf37"
+git-tree-sha1 = "add816d3973bff5cada1c910cfd9fae2ab0411c9"
 uuid = "357f21b8-02af-4872-bdb4-87c05a034e47"
-version = "0.2.3"
+version = "0.2.5"
 
 [[deps.CircularArrays]]
 deps = ["OffsetArrays"]
@@ -479,7 +479,7 @@ uuid = "4e289a0a-7415-4d19-859d-a7e5c4648b56"
 version = "1.0.7"
 
 [[deps.EulerDG]]
-deps = ["CartesianMeshes", "CutCellMethods", "LinearAlgebra", "MeshLibrary", "Printf", "SDFLibrary", "StaticArrays", "StructArrays", "WriteVTK"]
+deps = ["CartesianMeshes", "CutCellMethods", "KernelAbstractions", "LinearAlgebra", "MeshLibrary", "Printf", "SDFLibrary", "StaticArrays", "StructArrays", "WriteVTK"]
 path = "."
 uuid = "4b9a1561-1bdc-4288-bb30-1dac574ff254"
 version = "0.1.0"

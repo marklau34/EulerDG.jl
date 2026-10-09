@@ -29,9 +29,11 @@ end
     box = PV[(1, 2), (1.5, 2), (1.5, 2.25), (1, 2.25)]                # a full cell off the origin
     ell = PV[(0, 0), (2, 0), (2, 1), (1, 1), (1, 2), (0, 2)]          # nonconvex
     pentagon = PV[(0, 0), (1, 0), (1, 1), (1, 2), (0, 2)]             # hanging node at (1, 1)
+    # A coarse cell with hanging nodes on all four sides, starting mid-side.
+    octagon = PV[(0.5, 0), (1, 0), (1, 0.5), (1, 1), (0.5, 1), (0, 1), (0, 0.5), (0, 0)]
     hexagon = PV[(cos(θ), sin(θ)) for θ in range(0, 2π; length=7)[1:6]]
     fragment = PV[(0, 0.25), (1, 0.55), (1, 1), (0, 1)]               # a cut cell
-    polygons = (; square, box, ell, pentagon, hexagon, fragment)
+    polygons = (; square, box, ell, pentagon, octagon, hexagon, fragment)
 
     @testset "triangulate $name" for (name, pts) in pairs(polygons)
         ids = collect(Int32, eachindex(pts))
@@ -44,7 +46,7 @@ end
 
     @testset "polygon_rule $name" for (name, pts) in pairs(polygons)
         ids = collect(eachindex(pts))
-        isbox = name in (:square, :box)
+        isbox = name in (:square, :box, :pentagon, :octagon)        # collinear vertices allowed
         for degree in (isbox ? (3, 5) : (2, 4))
             x, w = polygon_rule(pts, ids; degree)
             @test length(x) == (isbox ? (degree == 3 ? 4 : 9) : (degree == 2 ? 3 : 6) * (length(pts) - 2))

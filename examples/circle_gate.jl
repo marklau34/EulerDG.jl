@@ -2,7 +2,7 @@
 # The Phase 4 circle gate at full resolution
 #
 # Run with `julia --project=examples -t auto examples/circle_gate.jl [sets...]`, with sets from A,
-# B, C (default: all three, then the summary) or `summary` alone. Each run is saved to
+# B, C, N (default: A, B and C, then the summary) or `summary` alone. Each run is saved to
 # out/circle_gate/ as it finishes, with its state, metrics, run log and, on unshifted grids, a VTK
 # file; a rerun skips the runs already saved, so the study can be stopped and resumed.
 #
@@ -16,6 +16,9 @@
 #   asymmetry against h.
 # - C. Grid-shift sweep at 8, 16 and 32 cells per diameter: four sub-cell shifts and three sliver
 #   shifts (a grid node 1e-3, 1e-6 and 1e-8 h outside the circle).
+# - N. Order study on the nested far field (`nested_cut_mesh`), at 8, 16, 32 and 64 cells per
+#   diameter: a finest box 1.5 diameters round the centre and 3.5 behind it, wrapped in coarser
+#   levels out to 70 radii or more, aligned to the centre so the mesh stays symmetric.
 #
 # The gate, as decided on Oct 9:
 #
@@ -43,9 +46,14 @@ const PV = SVector{2,Float64}
 # =====================================
 # The runs
 
-const SHIFTS = [(; tag="shift$k", shift=Tuple(s), gap=nothing) for (k, s) in enumerate(grid_shifts(5)[2:end])]
-const GAPS = [(; tag=@sprintf("gap%.0e", g), shift=(0.0, 0.0), gap=g) for g in (1e-3, 1e-6, 1e-8)]
-const SYMMETRIC = (; tag="sym", shift=(0.0, 0.0), gap=nothing)
+const SHIFTS = [(; tag="shift$k", shift=Tuple(s), gap=nothing, nested=false)
+                for (k, s) in enumerate(grid_shifts(5)[2:end])]
+const GAPS = [(; tag=@sprintf("gap%.0e", g), shift=(0.0, 0.0), gap=g, nested=false)
+              for g in (1e-3, 1e-6, 1e-8)]
+const SYMMETRIC = (; tag="sym", shift=(0.0, 0.0), gap=nothing, nested=false)
+# The nested far field (Oct 9): a finest box 1.5 diameters round the centre and 3.5 behind it,
+# wrapped in coarser levels out to 70 radii or more, 16 cells to a ring, aligned to the centre.
+const NESTED = (; tag="nested", shift=(0.0, 0.0), gap=nothing, nested=true)
 
 run_key(cpd, L, p) = "d$(cpd)_L$(L)_$(p.tag)"
 
@@ -53,11 +61,13 @@ function runs(set)
     set == "A" && return [(8, L, SYMMETRIC) for L in (3, 4, 6, 12)]
     set == "B" && return [(cpd, 3, SYMMETRIC) for cpd in (8, 16, 32, 64)]
     set == "C" && return [(cpd, 3, p) for cpd in (8, 16, 32) for p in vcat(SHIFTS, GAPS)]
-    error("unknown set $set; use A, B, C or summary")
+    set == "N" && return [(cpd, 35, NESTED) for cpd in (8, 16, 32, 64)]
+    error("unknown set $set; use A, B, C, N or summary")
 end
 
 # The mesh and discretization, and the circle's centre.
 function setup(cpd, L, p)
+    p.nested && return setup_nested(cpd, L)
     n = round(Int, 2L * cpd)
     g = CartesianGrid(Float64; mincorner=(-L, -L), maxcorner=(L, L), n=(n, n))
     pts = circle_points(; radius=0.5, h=minimum(g.d))
@@ -65,6 +75,17 @@ function setup(cpd, L, p)
         sliver_shift(polygon_body(pts), [PV(CartesianMeshes.get_node(g, I)) for I in CartesianIndices(g.n .+ 1)];
                      gap=p.gap * minimum(g.d))
     cut = cut_mesh(g, polygon_body(pts .+ Ref(c); name="circle"))
+    return discretize(cut, c)
+end
+
+function setup_nested(cpd, L)
+    g = CartesianGrid(Float64; mincorner=(-1.5, -1.5), maxcorner=(3.5, 1.5), n=(5cpd, 3cpd))
+    body = polygon_body(circle_points(; radius=0.5, h=minimum(g.d)); name="circle")
+    cut = nested_cut_mesh(g, body; farfield=((-L, -L), (L, L)), buffer=16, origin=(0.0, 0.0))
+    return discretize(cut, PV(0, 0))
+end
+
+function discretize(cut, c)
     m = cut.mesh
     bcs = NamedTuple{Tuple(m.boundary_names)}(Tuple(b == :wall ? boundary_condition_mirror_wall :
                                                     BoundaryConditionFarfield(UINF)
@@ -102,14 +123,16 @@ function run_case(cpd, L, p)
     flush(stdout)
     u = project((x, t, eq) -> UINF, semi)
     log = RunLog(joinpath(OUT, key * "_run.csv"), semi, UINF; every=100, point=Tuple(s.center))
-    seconds = @elapsed r = solve_steady!(u, semi; tol=1e-10, maxiter=400_000,
+    # The nested far field converges more slowly: allow it more iterations.
+    maxiter = p.nested ? 1_000_000 : 400_000
+    seconds = @elapsed r = solve_steady!(u, semi; tol=1e-10, maxiter,
                                          callback=Progress(log, key, 10_000, time()))
     close(log)
     record = (; key, cpd, L, radii=2L, tag=p.tag, elements=nelements(semi.mesh), minvf=s.minvf,
               converged=r.converged, iterations=r.iterations, residual=r.residual, seconds,
               metrics(semi, u, s.center)...)
     serialize(file, (; record, u))
-    p.tag == "sym" && write_solution_vtk(joinpath(OUT, key), semi, u; freestream=UINF)
+    p.tag in ("sym", "nested") && write_solution_vtk(joinpath(OUT, key), semi, u; freestream=UINF)
     @printf("  %s: %s after %d iterations, %.0f s; cl %+.2e, cd %.3e, stagnation Cp %.4f\n", key,
             r.converged ? "converged" : "NOT CONVERGED", r.iterations, seconds, record.cl, record.cd,
             record.cp_front)
@@ -212,6 +235,7 @@ function summary()
 
     A = filter(!isnothing, [find(8, L, "sym") for L in (3, 4, 6, 12)])
     B = filter(!isnothing, [find(cpd, 3, "sym") for cpd in (8, 16, 32, 64)])
+    N = filter(!isnothing, [find(cpd, 35, "nested") for cpd in (8, 16, 32, 64)])
     if length(A) == 4
         c6, c12, c24 = A[1].cp_front, A[3].cp_front, A[4].cp_front
         p = order(c6 - c12, c12 - c24)
@@ -233,14 +257,16 @@ function summary()
         end
     end
 
-    if length(B) >= 2
-        println("\nB. Order study at 6 radii:")
-        for (k, r) in enumerate(B)
+    for (title, S) in (("B. Order study at 6 radii:", B),
+                       ("N. Order study on the nested far field, 70 radii or more:", N))
+        length(S) >= 2 || continue
+        println("\n", title)
+        for (k, r) in enumerate(S)
             @printf("  %2d cells/D: cl %+.1e, asym tb %.1e, asym fa %.2e, cd %.3e, entropy %.3e, wake %.3e, Cp front %.4f",
                     r.cpd, r.cl, r.asym_tb, r.asym_fa, r.cd, r.entropy_l2, r.wake, r.cp_front)
             if k > 1
-                q = B[k - 1]
-                @printf("; orders: cd %.2f, entropy %.2f, wake %.2f, asym fa %.2f", order(q.cd, r.cd),
+                q = S[k - 1]
+                @printf("; orders: |cd| %.2f, entropy %.2f, wake %.2f, asym fa %.2f", order(abs(q.cd), abs(r.cd)),
                         order(q.entropy_l2, r.entropy_l2), order(q.wake, r.wake),
                         order(q.asym_fa, r.asym_fa))
             end

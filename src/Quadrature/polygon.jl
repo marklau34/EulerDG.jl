@@ -1,10 +1,10 @@
 # =====================================
 # Rules on element polygons
 #
-# An axis-aligned rectangle -- every full cell -- gets the tensor Gauss rule on its box. Any other
-# polygon is cut into triangles by ear clipping, which also handles nonconvex polygons (a
-# trailing-edge wedge) and collinear vertices (a hanging node), and each triangle gets a symmetric
-# rule. Points are placed relative to a vertex, so their rounding stays at the scale of the
+# An axis-aligned rectangle -- every full cell, hanging nodes on its sides included -- gets the
+# tensor Gauss rule on its box. Any other polygon is cut into triangles by ear clipping, which also
+# handles nonconvex polygons (a trailing-edge wedge) and collinear vertices, and each triangle gets
+# a symmetric rule. Points are placed relative to a vertex, so their rounding stays at the scale of the
 # element even far from the origin.
 
 @inline _cross(a, b) = a[1] * b[2] - a[2] * b[1]
@@ -44,14 +44,25 @@ function triangulate(points::AbstractVector{SVector{2,T}}, ids::AbstractVector{<
     return tris
 end
 
-# Whether the polygon is an axis-aligned rectangle: four edges, alternately horizontal and vertical.
+# Whether the counter-clockwise polygon is an axis-aligned rectangle, collinear vertices allowed:
+# every edge runs along +x, +y, -x or -y, and walking round it the direction only ever stays or
+# turns a quarter left, four times in all. A square cell with hanging nodes on its sides is one.
 function _is_box(points, ids)
-    length(ids) == 4 || return false
-    flat = ntuple(4) do k
-        e = points[ids[mod1(k + 1, 4)]] - points[ids[k]]
-        e[2] == 0 && e[1] != 0 ? 1 : e[1] == 0 && e[2] != 0 ? 2 : 0
+    n = length(ids)
+    n >= 4 || return false
+    dir(k) = begin
+        e = points[ids[mod1(k + 1, n)]] - points[ids[k]]
+        e[2] == 0 ? (e[1] > 0 ? 1 : e[1] < 0 ? 3 : 0) : e[1] == 0 ? (e[2] > 0 ? 2 : 4) : 0
     end
-    return flat == (1, 2, 1, 2) || flat == (2, 1, 2, 1)
+    turns = 0
+    for k in 1:n
+        a, b = dir(k), dir(mod1(k + 1, n))
+        (a == 0 || b == 0) && return false
+        b == a && continue
+        b == mod1(a + 1, 4) || return false
+        turns += 1
+    end
+    return turns == 4
 end
 
 """
@@ -59,8 +70,8 @@ end
 
 A quadrature rule on the polygon through `points[ids]`, exact for polynomials up to `degree`:
 
-- an axis-aligned rectangle gets the tensor Gauss rule on its box: 2 x 2 points to degree 3, 3 x 3
-  to degree 5;
+- an axis-aligned rectangle, collinear vertices allowed (a cell with hanging nodes), gets the
+  tensor Gauss rule on its box: 2 x 2 points to degree 3, 3 x 3 to degree 5;
 - any other polygon is triangulated with [`triangulate`](@ref), and each triangle gets
   [`TRIANGLE3`](@ref) (3 points) to degree 2, or [`TRIANGLE6`](@ref) (6 points) to degree 4.
 

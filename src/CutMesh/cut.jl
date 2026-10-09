@@ -54,7 +54,21 @@ cell, a body vertex lies in a cell left uncut, or the fluid area misses more tha
 slivers explain. `report` is described in [`cut_report`](@ref).
 """
 function cut_mesh(grid::CartesianGrid{2,Float64}, body::Body; drop_area::Real=1e-12)
-    cache = allocate_cache(grid, PolylineClippingCutCell(; drop_area=Float64(drop_area)))
+    c = _cut_polygons(grid, body, Float64(drop_area))
+    mesh = PolygonMesh(c.points, c.polygons, c.names; parent=c.parents, fragment=c.fragments,
+                       parent_area=c.areas, boundary_names=CUT_BOUNDARIES)
+    report = _cut_report(grid, body, c.info, c.cache, mesh, c.closed, Float64(drop_area))
+    return (; mesh, report)
+end
+
+const CUT_BOUNDARIES = [:wall, :x_neg, :x_pos, :y_neg, :y_pos]
+
+# The cut, as the builder's inputs: the vertex pool with `id!`, which adds a point to it or finds
+# it there; the polygons with their parents, fragments and parent areas; the boundary names; and the
+# cutter's cell info, cache and closed intervals, for the report. The nested builder adds its coarse
+# cells to these before building.
+function _cut_polygons(grid::CartesianGrid{2,Float64}, body::Body, drop_area::Float64)
+    cache = allocate_cache(grid, PolylineClippingCutCell(; drop_area))
     update_cache!(cache, body.sdf, grid)
     info = cache.info
     cells = CartesianIndices(grid)
@@ -118,10 +132,7 @@ function cut_mesh(grid::CartesianGrid{2,Float64}, body::Body; drop_area::Real=1e
             throw(ArgumentError("cell $(Tuple(ci)) has status $st but no fluid loop"))
         end
     end
-    mesh = PolygonMesh(points, polygons, names; parent=parents, fragment=fragments,
-                       parent_area=areas, boundary_names=[:wall, :x_neg, :x_pos, :y_neg, :y_pos])
-    report = _cut_report(grid, body, info, cache, mesh, closed, Float64(drop_area))
-    return (; mesh, report)
+    return (; points, id!, polygons, parents, fragments, areas, names, info, cache, closed)
 end
 
 # The ends of the stretch [s0, s1] of face `dir` of the cell with corners `lo`, `hi`, canonical.
@@ -218,11 +229,14 @@ function _loop_area(pts)
 end
 @inline _cross(a, b) = a[1] * b[2] - a[2] * b[1]
 
-function _cut_report(grid, body, info, cache, mesh, closed, drop_area)
+# `domain` is the corners of the whole domain, when it is larger than the cut grid.
+function _cut_report(grid, body, info, cache, mesh, closed, drop_area; domain=nothing)
     cells = CartesianIndices(grid)
     status = [info[ci].status for ci in cells]
     s = mesh_summary(mesh)
-    lo, hi = PV(get_node(grid, first(cells))), PV(get_node(grid, last(cells) + CartesianIndex(1, 1)))
+    lo, hi = domain === nothing ?
+             (PV(get_node(grid, first(cells))), PV(get_node(grid, last(cells) + CartesianIndex(1, 1)))) :
+             domain
     domain_area = (hi[1] - lo[1]) * (hi[2] - lo[2])
     body_area = _loop_area(body.points)
     ncut = count(st -> st == PL_CUT || st == PL_SPLIT, status)
@@ -236,14 +250,16 @@ function _cut_report(grid, body, info, cache, mesh, closed, drop_area)
         count_by_parent[p] = get(count_by_parent, p, 0) + 1
     end
     split = sort([cells[p] for (p, n) in count_by_parent if n > 1]; by=ci -> LinearIndices(grid)[ci])
+    # The smallest volume fraction is in a cut cell, unless nothing was cut smaller than a cell.
     e = s.min_volume_fraction_element
+    p = mesh.elements.parent[e]
     return (; cells=(; fluid=count(==(PL_FLUID), status), cut=count(==(PL_CUT), status),
                      split=count(==(PL_SPLIT), status), solid=count(==(PL_SOLID), status),
                      snapped=count(ci -> info[ci].flags & CutCellMethods.PL_FLAG_SNAPPED != 0,
                                    cells)),
             elements=s.nelements, full=s.nfull, fragments=s.ncut + s.nsplit, split_cells=split,
             min_volume_fraction=s.min_volume_fraction,
-            min_volume_fraction_cell=cells[mesh.elements.parent[e]],
+            min_volume_fraction_cell=1 <= p <= length(cells) ? cells[p] : nothing,
             fluid_area=s.area, body_area, domain_area, area_defect=defect,
             wall_length=s.boundaries.wall.length, body_perimeter=polygon_perimeter(body.points),
             closed_intervals=length(closed), nonconvex=s.nnonconvex, max_closure=s.max_closure,
@@ -273,8 +289,18 @@ function cut_report(io::IO, cut::NamedTuple)
             r.elements, r.full, r.fragments, c.fluid + c.cut + c.split + c.solid)
     @printf(io, "  cells: %d fluid, %d cut, %d split, %d solid; %d snapped onto by a dropped sliver\n",
             c.fluid, c.cut, c.split, c.solid, c.snapped)
-    @printf(io, "  smallest volume fraction %.3e, in cell %s\n", r.min_volume_fraction,
-            Tuple(r.min_volume_fraction_cell))
+    cell = r.min_volume_fraction_cell
+    @printf(io, "  smallest volume fraction %.3e, in %s\n", r.min_volume_fraction,
+            cell === nothing ? "a coarse cell" : "cell $(Tuple(cell))")
+    if haskey(r, :levels)
+        lo, hi = r.domain
+        @printf(io, "  %d levels on [%.4g, %.4g] x [%.4g, %.4g]; elements by level, coarsest first:\n",
+                length(r.levels), lo[1], hi[1], lo[2], hi[2])
+        for v in r.levels
+            @printf(io, "    level %d: cells %.4g x %.4g, %d elements\n", v.level, v.h[1], v.h[2],
+                    v.elements)
+        end
+    end
     @printf(io, "  fluid area %.12e; domain %.12e, body %.12e; defect %.2e (dropped slivers)\n",
             r.fluid_area, r.domain_area, r.body_area, r.area_defect)
     @printf(io, "  wall length %.12e, body perimeter %.12e; %d closed intervals\n", r.wall_length,

@@ -238,6 +238,12 @@ Phases 1 and 2 are independent and can run in parallel. The circle comes before 
   - the circle's circulation is not fixed by the inviscid problem, so a shifted grid picks one.
 
   The open choices are a farfield correction or a larger domain, and whether the lift gate moves to the airfoil.
+- **Far boundary settled (Oct 9): the nested far field** (`nested_cut_mesh`, see the open-decisions table). With the boundary at 70 radii or more, at 8 and 16 cells per diameter:
+  - the drag floor is gone (cd -6.8e-4 at 16, against 1.48e-2 at 6 radii);
+  - the stagnation Cp is within 0.2% of isentropic without extrapolation;
+  - lift is round-off.
+
+  The explicit solve takes up to 5x more iterations on the larger domain. The nested order study at 32 and 64 cells per diameter is still to run.
 
 **Circle gate.** The inviscid circle has no circulation and no wake, so any lift, drag or asymmetry is numerical error. As restated on Oct 9, since a shifted grid is not symmetric and its asymmetry is discretization error, not round-off:
 
@@ -274,7 +280,7 @@ Eight choices were open; two were settled on Oct 8 and are marked as decided. Th
 | --- | --- | --- |
 | Runtime: CPU FP64 only, or GPU kernels from the start | CPU FP64 first; face-loop layout kept GPU-friendly | Phase 0 |
 | Trixi.jl as a dependency, or copy its equation and flux functions | **Decided (Oct 8): copy.** Trixi 0.17.13 adds 2.5 s to every load and a 228-package tree, for about eight functions | Phase 0 |
-| Version 1 background mesh: stretched tensor-product, or quadtree | **Decided (Oct 8): uniform for now**, the only grid CartesianMeshes and CutCellMethods handle. Revisit before Phase 5, whose farfield at 50–100 chords needs stretching | Phase 2 |
+| Version 1 background mesh: stretched tensor-product, or quadtree | **Decided (Oct 9): nested grids.** The body is cut on a uniform finest box, the only grid CutCellMethods' polyline clipping takes. The box is wrapped in CartesianMeshes `NestedGrids` levels out to the far field, each doubling the cell size, with hanging nodes where levels meet (`nested_cut_mesh`). Square cells keep the explicit local steps growing with the cells, which stretched cells would not. `AdaptiveMesh` stays the route to surface-following or solution-adaptive refinement after version 1, once the cutter handles tree leaves | Phase 2 |
 | Production flux: HLLC or Roe | HLLC; keep Rusanov for debugging | Phase 3 |
 | Is the P0 fallback acceptable, given state redistribution was ruled out | Yes, as an off-by-default safeguard | Phase 4 |
 | Trailing-edge tip: accept truncation, or two-segment wedge | Accept truncation in version 1 and report it | Phase 5 |
