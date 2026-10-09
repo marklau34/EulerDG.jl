@@ -2,8 +2,9 @@
 
 Companion to the plan's Phase 4 checklist. By decision on Oct 8, 2026, this phase runs at low
 resolution only: no implicit solver yet, and no high-resolution case without a fresh decision.
-Part 1 records the choices and findings, part 2 the gate results, and part 3 the decisions now
-open.
+Part 1 records the choices and findings, part 2 the gate results, and part 3 the decisions that
+were open after them. Part 4 is the full-resolution study of Oct 9, run against the restated gate,
+and part 5 the decisions it leaves.
 
 New code:
 
@@ -104,3 +105,110 @@ Grid-shift sweep at 8 cells per diameter:
 - **The default volume rule for cut cells.** Degree 4 on triangulated fragments removes the
   triangulation asymmetry and, at 16 cells per diameter, sped convergence; the plan's default is 2.
 - **The run-configuration format**, deferred to this phase on Oct 8. It is not built yet.
+
+## 4. The full-resolution study (Oct 9)
+
+On Oct 9 the gate was restated, since a shifted grid is not symmetric and its asymmetry is
+discretization error, not round-off (see the plan's Phase 4 section). The study is
+`examples/circle_gate.jl`: 28 runs, 3.8 hours on 16 threads, saved with their states and run logs
+to out/circle_gate/. The setup is as in part 2.
+
+Three measurements are new:
+
+- The stagnation Cp is read from the DG trace exactly where the ray from the centre meets the
+  wall. The largest Gauss-point value misses the peak by up to 0.005 at 8 cells per diameter.
+- The top-bottom and fore-aft Cp asymmetries compare each wall Gauss point with the trace at its
+  mirror image on the wall. That works on shifted grids too.
+- The wake entropy is the mean |s - s∞|/s∞ of the cell averages one to three diameters behind the
+  centre, within half a diameter of the axis.
+
+**A. Domain study, 8 cells per diameter, symmetric placement.** Iterations barely grow with the
+domain, so larger domains cost only in proportion to their size.
+
+| Far boundary | Elements | Iterations | Stagnation Cp | Excess | cd |
+| --- | --- | --- | --- | --- | --- |
+| 6 radii | 2,272 | 27,546 | 1.1173 | 0.0946 | 5.48e-2 |
+| 8 radii | 4,064 | 27,609 | 1.0750 | 0.0523 | 4.12e-2 |
+| 12 radii | 9,184 | 27,809 | 1.0456 | 0.0229 | 3.37e-2 |
+| 24 radii | 36,832 | 29,150 | 1.0277 | 0.0050 | 3.02e-2 |
+
+- The excess falls at order 2.00 in 1/L and extrapolates to 1.0217, 0.09% below the isentropic
+  1.0227.
+- The 8-cell grid reads 0.0055 high, against the 64-cell grid at 6 radii. Adding that gives
+  1.0163, 0.63% low, if the grid's error does not depend on the domain.
+- The far boundary also accounts for much of the drag at 8 cells per diameter.
+
+**B. Order study, far boundary at 6 radii, symmetric placement:**
+
+| Cells per diameter | Iterations | cl | Top-bottom | Fore-aft (order) | cd (order) | Entropy L2 (order) | Wake (order) | Stagnation Cp |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 8 | 27,546 | -1.5e-7 | 2.3e-7 | 0.70 | 5.48e-2 | 1.12e-2 | 3.92e-3 | 1.1173 |
+| 16 | 20,288 | -9.2e-9 | 1.3e-8 | 0.30 (1.20) | 1.48e-2 (1.89) | 2.64e-3 (2.08) | 7.09e-4 (2.47) | 1.1116 |
+| 32 | 39,293 | -9.8e-9 | 1.4e-8 | 0.090 (1.76) | 1.14e-2 (0.37) | 5.70e-4 (2.21) | 1.24e-4 (2.51) | 1.1113 |
+| 64 | 129,938 | -7.2e-9 | 1.0e-8 | 0.063 (0.52) | 1.35e-2 (-0.24) | 1.21e-4 (2.24) | 2.15e-5 (2.53) | 1.1119 |
+
+- The drag stops falling at about 0.012, and the fore-aft asymmetry slows with it.
+- The rear stagnation Cp climbs towards the front value: 0.48, 0.86, 1.02, 1.08 against 1.11.
+- The 64-cell run took 37 minutes.
+
+**C. Grid-shift sweep, far boundary at 6 radii.** Sliver placements agree with one another to
+three digits, so sliver size does not matter. Entropy and wake on shifted grids match the symmetric
+placement within 7%. Drag matches within 11% at 32 cells per diameter, and more loosely on the
+coarser grids.
+
+| Cells per diameter | Iterations | Largest \|cl\| | Top-bottom | Fore-aft | cd |
+| --- | --- | --- | --- | --- | --- |
+| 8 | 23,000-32,000 | 0.157 | 0.62 | 1.17 | 4.1e-2 to 6.2e-2 |
+| 16 | 134,000-190,000 | 0.135 | 0.26 | 0.38 | 8.5e-3 to 1.3e-2 |
+| 32 | all stopped at 400,000 | 0.079 | 0.12 | 0.13 | 1.06e-2 to 1.27e-2 |
+
+The lift of each placement, at 8, 16 and 32 cells per diameter:
+
+| Placement | 8 | 16 | 32 |
+| --- | --- | --- | --- |
+| shift 1 | -0.037 | -0.019 | -0.010 |
+| shift 2 | -0.145 | +0.127 | -0.038 |
+| shift 3 | -0.018 | -0.135 | -0.009 (still drifting, toward -0.009) |
+| shift 4 | +0.157 | +0.011 | +0.079 (toward +0.081) |
+| node 1e-3 h outside | -0.055 | +0.013 | +0.033 (toward +0.035) |
+
+At 32 cells per diameter the residuals stopped between 1.7e-10 and 6.6e-8.
+
+**Against the gate:**
+
+| Criterion | Result |
+| --- | --- |
+| 1. Residual 10 orders on every run | Not met: 21 of 28 runs. The seven shifted runs at 32 cells per diameter stopped at the 400,000-iteration cap. |
+| 2a. Symmetric lift and top-bottom asymmetry at round-off | Met: at most 1.5e-7 and 2.3e-7 on all 8 symmetric runs |
+| 2b. Shifted lift and top-bottom asymmetry fall with h, \|cl\| < 1e-3 at the finest | Not met. Top-bottom falls at about first order, and the largest \|cl\| falls slowly (0.157, 0.135, 0.079), but no single placement falls steadily. \|cl\| is 0.079 at 32 cells per diameter. |
+| 3. Fore-aft asymmetry falls with h | Met, but slowing (order 0.52 from 32 to 64) |
+| 4. Extrapolated stagnation Cp within 0.5% | Borderline: -0.09% from the domain study alone, -0.63% with the grid's share added |
+| 5. Drag and entropy L2 at about second order | Entropy met (2.08, 2.21, 2.24). Drag not met (1.89, 0.37, -0.24). |
+| 6. Wake at about second order, below 1e-4 at the finest | Met: orders 2.47-2.53, 2.1e-5 at 64 cells per diameter |
+
+**Two causes.**
+
+1. **The far boundary.** The characteristic farfield is upwind by design: it takes three
+   characteristics from the freestream at inflow and one at outflow. At 6 radii it biases the
+   steady flow fore-aft by roughly (R/L)². That leaves a drag floor of about 0.012 that no grid
+   refinement removes, slows the fore-aft convergence, and raises the stagnation Cp. The domain
+   study shows the stagnation-Cp excess falling exactly as L^-2.
+2. **The circulation.** The circle has no sharp trailing edge, so the steady Euler problem does not
+   fix its circulation: every circulation gives a valid potential flow. A shifted grid picks one
+   through its own asymmetric dissipation. That makes the lift erratic in h, and changing it means
+   shedding vorticity through the wake, the slowest mode under explicit local steps:
+   134,000-400,000+ iterations against 20,000-130,000 on the symmetric placement. The airfoil's
+   trailing edge fixes the circulation by the Kutta condition, so this is particular to the circle.
+
+## 5. Decisions now open, after the study
+
+- **The far boundary.** Either a farfield correction, freestream plus the compressible doublet
+  (and, for Phase 5, the point vortex), at the boundary state, then a rerun of B at 6 radii (about
+  an hour). Or an order study on a domain of 24 radii: 16 cells per diameter is 147,000 elements,
+  about 40 minutes; 32 cells per diameter is 590,000 elements, several hours.
+- **The shifted-grid lift criterion.** Either report it for the circle and move the lift gate to
+  the airfoil, keeping on shifted grids convergence and entropy, wake and drag close to the
+  symmetric placement's. Or pursue it on finer shifted grids, which takes hours per run with
+  explicit steps and probably the implicit solver.
+- **The iteration cap.** At 32 cells per diameter the shifted runs need about 600,000 iterations
+  to converge 10 orders, with the lift settled to about 1e-4 well before then.

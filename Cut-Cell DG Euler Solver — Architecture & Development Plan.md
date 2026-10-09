@@ -221,13 +221,34 @@ Phases 1 and 2 are independent and can run in parallel. The circle comes before 
 - On shifted grids the lift reaches ±0.16 at 8 cells per diameter, because the under-resolved wake is asymmetric.
 - Meeting the full gate needs finer grids and a larger domain. That waits for a decision on resolution, the implicit solver and stretched grids.
 
-**Circle gate.** The inviscid circle has no circulation and no wake, so any lift, drag or asymmetry is numerical error. All of these must hold on every grid and every grid shift:
+**Full-resolution study (Oct 9): gate not passed.** 28 runs, up to 64 cells per diameter and a far boundary at 24 radii; the details are in `dev-notes/phase4.md`.
 
-- Residual drops 10 orders.
-- Lift is zero to round-off, and Cp is symmetric top to bottom and fore to aft.
-- Stagnation Cp matches the isentropic value, about 1.023 at M = 0.3.
+- Met:
+  - lift and top-bottom asymmetry at round-off on every symmetric run, at most 1.5e-7;
+  - entropy error at order 2.1–2.2;
+  - entropy wake at order 2.5, and 2.1e-5 at 64 cells per diameter;
+  - fore-aft asymmetry falling, 0.70 to 0.063.
+- Not met:
+  - drag levels off at about 0.012 with the far boundary at 6 radii;
+  - shifted-grid lift is erratic in h: largest |cl| 0.157, 0.135 and 0.079 at 8, 16 and 32 cells per diameter;
+  - the seven shifted runs at 32 cells per diameter stopped at 400,000 iterations, short of 10 orders.
+- Borderline: the stagnation Cp extrapolates to 0.09% below isentropic from the domain study, or 0.63% below with the grid's share added.
+- Two causes:
+  - the upwind characteristic farfield biases the flow fore-aft by about (R/L)²;
+  - the circle's circulation is not fixed by the inviscid problem, so a shifted grid picks one.
+
+  The open choices are a farfield correction or a larger domain, and whether the lift gate moves to the airfoil.
+
+**Circle gate.** The inviscid circle has no circulation and no wake, so any lift, drag or asymmetry is numerical error. As restated on Oct 9, since a shifted grid is not symmetric and its asymmetry is discretization error, not round-off:
+
+- Residual drops 10 orders on every run.
+- On the symmetric placement, lift and the top-bottom Cp asymmetry are zero to round-off. On shifted grids both fall with h, and |cl| is below 1e-3 on the finest sweep grid.
+- The fore-aft Cp asymmetry falls with h.
+- The stagnation Cp, extrapolated to an unbounded domain from a domain study, is within 0.5% of the isentropic value, about 1.023 at M = 0.3.
 - Spurious drag and the entropy-error L2 norm fall with h, close to second order.
-- No spurious wake of entropy behind the circle in the VTK output.
+- The entropy wake falls at close to second order and is below 1e-4 on the finest grid; the VTK output shows it.
+
+The runs (`examples/circle_gate.jl`): a domain study at 8 cells per diameter with the far boundary at 6, 8, 12 and 24 radii; an order study at 6 radii at 8, 16, 32 and 64 cells per diameter; and a grid-shift sweep of seven placements at 8, 16 and 32 cells per diameter.
 
 ### Phase 5 · Subsonic airfoil
 
