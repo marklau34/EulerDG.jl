@@ -283,7 +283,7 @@ The runs (`examples/circle_gate.jl`): a domain study at 8 cells per diameter wit
 
 ### Phase 5 · Subsonic airfoil
 
-**Reference case (proposed Oct 10).** Vassberg and Jameson, "In Pursuit of Grid Convergence for Two-Dimensional Euler Solutions", J. Aircraft 47(4), 2010: NACA 0012 at M 0.5, α 1.25°.
+**Reference case (decided Oct 10).** Vassberg and Jameson, "In Pursuit of Grid Convergence for Two-Dimensional Euler Solutions", J. Aircraft 47(4), 2010: NACA 0012 at M 0.5, α 1.25°.
 
 - **Their geometry:** the standard thickness formula with its chord extended to the sharp trailing edge at x = 1.0089304115, reference chord 1, moment about x = 0.25.
 - **Their grids:** O-meshes to 4096², about 150 chords to the far boundary.
@@ -291,12 +291,26 @@ The runs (`examples/circle_gate.jl`): a domain study at 8 cells per diameter wit
 
 Checklist:
 
-- [ ] NACA 0012 with the Vassberg-Jameson sharp trailing edge, and a reviewed trailing-edge report
+- [x] NACA 0012 with the Vassberg-Jameson sharp trailing edge (`naca4_points(...; trailing_edge=:extended)`), and a trailing-edge report on every grid
 - [x] Far field at 50–100 chords: the nested far field (Oct 9), instead of a stretched grid
 - [x] Forces, Cp, entropy and VTK output: `examples/naca0012_flow.jl` (Oct 9)
-- [ ] Three-grid study comparing lift, moment and Cp with the reference
-- [ ] Optional point-vortex farfield correction
-- [ ] Run-configuration format, moved from Phase 4
+- [x] Three-grid study comparing lift, moment and Cp with the reference: `examples/naca0012_study.jl`
+- [ ] Optional point-vortex farfield correction: not done
+- [ ] Run-configuration format, moved from Phase 4: not done
+
+**Closed (Oct 10), by decision, on 32, 64 and 128 cells per chord.**
+
+| Cells per chord | cl (error) | cm, nose-up positive (error) | cd | Entropy L2 |
+| --- | --- | --- | --- | --- |
+| 32 | 0.16768 (-7.0%) | -0.00136 (40%) | +1.2e-3 | 7.2e-3 |
+| 64 | 0.17058 (-5.4%) | -0.00149 (34%) | -1.3e-3 | 3.5e-3 |
+| 128 | 0.17730 (-1.7%) | -0.00204 (10%) | -1.4e-5 | 9.9e-4 |
+
+- **Orders.** From 64 to 128 the lift, moment and entropy errors fall at orders 1.68, 1.77 and 1.82. From 32 to 64 they fell at 0.2–1, while the leading edge was under-resolved.
+- **Pressures.** Against a published 4096² solution, Cp at 128 matches to 0.001–0.007 along the chord. The remaining gap is the trailing-edge stagnation spike, which carries little load.
+- **Trailing edge.** Its cut topology is identical on all three grids, the edge is exact, and no tip is truncated.
+- **Moment convention.** `wall_forces`' `cm` became nose-up positive.
+- Details are in `dev-notes/phase5.md`.
 
 ### Phase 6 · Acceleration
 
@@ -308,7 +322,7 @@ Backlog after version 1: quadtree refinement, curved cut faces, a two-segment tr
 
 ## Open decisions
 
-Eight choices were open. Two were settled on Oct 8 and one on Oct 9, Phase 2 settled the trailing-edge tip, and the first airfoil case was proposed on Oct 10; each is marked. The recommendation for each open one is the default if nothing else is decided.
+Eight choices were open. Two were settled on Oct 8, one on Oct 9 and one on Oct 10, and Phase 2 settled the trailing-edge tip; each is marked. The recommendation for each open one is the default if nothing else is decided.
 
 | Decision | Recommendation | Needed by |
 | --- | --- | --- |
@@ -318,7 +332,7 @@ Eight choices were open. Two were settled on Oct 8 and one on Oct 9, Phase 2 set
 | Production flux: HLLC or Roe | HLLC; keep Rusanov for debugging | Phase 3 |
 | Is the P0 fallback acceptable, given state redistribution was ruled out | Yes, as an off-by-default safeguard | Phase 4 |
 | Trailing-edge tip: accept truncation, or two-segment wedge | **Settled by Phase 2:** the exact polyline cut keeps the polygon's own wall pieces in each fragment, so the tip is not truncated | Phase 5 |
-| First airfoil case and reference data source | **Proposed (Oct 10):** Vassberg and Jameson (2010), NACA 0012 at M 0.5, α 1.25°, on their sharp-trailing-edge geometry; FLO82 continuum Cl 0.180346, Cm -0.002269 | Phase 5 |
+| First airfoil case and reference data source | **Decided (Oct 10):** Vassberg and Jameson (2010), NACA 0012 at M 0.5, α 1.25°, on their sharp-trailing-edge geometry; FLO82 continuum Cl 0.180346, Cm -0.002269 | Phase 5 |
 | Implicit solver timing: after Phase 5, or earlier | After Phase 5, unless explicit convergence blocks airfoil grid studies. **Evidence (Oct 10):** iterations grow about 3x per refinement on the nested far field, and the 64-cell circle settles into a limit cycle, so the fine airfoil grids likely need it | Phase 5 |
 
 ## References

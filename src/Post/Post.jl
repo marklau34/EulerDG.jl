@@ -89,9 +89,13 @@ end
         -> (; force, moment, cd, cl, cm)
 
 The pressure force on the body, `∮ (p - p∞) n ds` with `n` into the body, from the interior trace
-at the wall faces' Gauss points, and its moment about `point`, counter-clockwise positive. The
+at the wall faces' Gauss points, and its `moment` about `point`, counter-clockwise positive. The
 coefficients are scaled by the freestream's dynamic pressure and the reference `length` (squared
 for the moment). Drag is along the freestream and lift a quarter-turn counter-clockwise from it.
+
+`cm` is the pitching moment coefficient in the aerodynamic convention, nose-up positive: with lift
+a quarter-turn counter-clockwise from the drag, nose-up is clockwise, so `cm` is minus the scaled
+`moment`. (Before Oct 10 it was the scaled counter-clockwise moment, of the opposite sign.)
 Subtracting `p∞` does not change the force on a closed body; it keeps round-off down.
 """
 function wall_forces(semi::DGSemidiscretization{T}, u, uinf; boundary::Symbol=:wall, length=1,
@@ -107,7 +111,7 @@ function wall_forces(semi::DGSemidiscretization{T}, u, uinf; boundary::Symbol=:w
         M += r[1] * dF[2] - r[2] * dF[1]
     end
     return (; force=F, moment=M, cd=F' * ref.drag / (ref.q * length),
-            cl=F' * ref.lift / (ref.q * length), cm=M / (ref.q * length^2))
+            cl=F' * ref.lift / (ref.q * length), cm=-M / (ref.q * length^2))
 end
 
 """
@@ -134,8 +138,9 @@ end
 A [`solve_steady!`](@ref EulerDG.PseudoTime.solve_steady!) callback that writes the run log to the
 CSV file `path`: one row on the first iteration and every `every` iterations after, with the
 iteration, the wall time, the L2 density residual relative to the first, the largest residual and
-its element, and -- if the mesh has a `:wall` -- the lift, drag and moment coefficients
-(`length` and `point` as in [`wall_forces`](@ref)). Close it with `close`.
+its element, and -- if the mesh has a `:wall` -- the lift, drag and pitching moment coefficients,
+the moment nose-up positive (`length` and `point` as in [`wall_forces`](@ref)). Close it with
+`close`.
 """
 mutable struct RunLog{S,V}
     io::IOStream

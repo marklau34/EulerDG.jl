@@ -40,6 +40,15 @@
         s = entropy_error(semi, u, uinf)
         @test s.l2 < 1e-13 && s.max < 1e-13
 
+        # The pitching moment is nose-up positive. A pressure rising with height pushes the circle
+        # down through its centre; about a point at its front, that is behind the point and pitches
+        # the nose up. The raw moment is counter-clockwise positive, so it is negative.
+        rising = project((x, t, eq) -> prim2cons(SVector(1.0, 0.3cosd(10), 0.3sind(10), 1 / 1.4 + 0.01x[2]), eq),
+                         semi)
+        f = wall_forces(semi, rising, uinf; length=1, point=(-0.5, 0))
+        @test f.force[2] < 0 && f.moment < 0 && f.cm > 0
+        @test f.cm ≈ -f.moment / (0.5 * 0.3^2)
+
         # A uniform pressure 0.1 above the freestream's pushes on a closed body with no net force.
         up = project((x, t, eq) -> prim2cons(SVector(1.0, 0.3cosd(10), 0.3sind(10), 1 / 1.4 + 0.1), eq),
                      semi)
