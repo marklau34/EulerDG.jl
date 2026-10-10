@@ -208,7 +208,23 @@ Phases 1 and 2 are independent and can run in parallel. The circle comes before 
 
 ### Phase 4 · 2D inviscid circle
 
-- [ ] Run-configuration format, moved from Phase 0 (Oct 8); the grid-shift sweep is its first user. Not built yet: the low-resolution sweep uses keyword arguments.
+**Closed (Oct 10), by decision, at 32 cells per diameter.**
+
+- Passed on the nested far field (70 radii or more) at 8, 16 and 32 cells per diameter:
+  - every run converges 10 orders;
+  - lift and the top-bottom asymmetry stay at round-off;
+  - the stagnation Cp is within 0.2% of isentropic;
+  - the fore-aft asymmetry falls with h;
+  - the entropy error falls at orders 2.25 and 2.38;
+  - the wake falls at order 2.5.
+- Not closed:
+  - The drag's order: it crosses zero between 8 and 16 cells per diameter.
+  - The wake threshold: 1.19e-4 at 32 cells per diameter, against 1e-4.
+  - Shifted-grid lift: the inviscid circle leaves its circulation free, so each shifted grid picks one. The lift gate moves to the airfoil, whose trailing edge fixes the circulation.
+- At 64 cells per diameter the explicit solve does not reach a steady state on the nested far field. It settles into a symmetric, global limit cycle (drag swinging about 1, averaging -0.0005 to +0.002) with the finest box ending 1.5 or 3 diameters out. The uniform 6-radius grid, with the same cells near the circle, converges. This is recorded for Phase 6.
+- Details are in `dev-notes/phase4.md`.
+
+- [ ] Run-configuration format, moved from Phase 0 (Oct 8); the grid-shift sweep is its first user. Not built yet: the sweeps use keyword arguments. Moved to Phase 5.
 - [x] Characteristic farfield boundary
 - [x] Convergence monitors: L2 and maximum residual with its location, plus a CSV run log
 - [x] Subsonic inviscid circle at M = 0.3, below the circle's critical Mach number, at low resolution (8 and 16 cells per diameter)
@@ -267,11 +283,20 @@ The runs (`examples/circle_gate.jl`): a domain study at 8 cells per diameter wit
 
 ### Phase 5 · Subsonic airfoil
 
-- [ ] NACA 0012 SDF with a sharp trailing edge, and a reviewed trailing-edge report
-- [ ] Stretched grid with the farfield at 50–100 chords
-- [ ] Forces, Cp, entropy and VTK output
-- [ ] Three-grid study comparing lift, moment and Cp with reference data
+**Reference case (proposed Oct 10).** Vassberg and Jameson, "In Pursuit of Grid Convergence for Two-Dimensional Euler Solutions", J. Aircraft 47(4), 2010: NACA 0012 at M 0.5, α 1.25°.
+
+- **Their geometry:** the standard thickness formula with its chord extended to the sharp trailing edge at x = 1.0089304115, reference chord 1, moment about x = 0.25.
+- **Their grids:** O-meshes to 4096², about 150 chords to the far boundary.
+- **FLO82 continuum estimates** (their Table 2): Cl 0.180346, Cd 5e-8, Cm -0.002269.
+
+Checklist:
+
+- [ ] NACA 0012 with the Vassberg-Jameson sharp trailing edge, and a reviewed trailing-edge report
+- [x] Far field at 50–100 chords: the nested far field (Oct 9), instead of a stretched grid
+- [x] Forces, Cp, entropy and VTK output: `examples/naca0012_flow.jl` (Oct 9)
+- [ ] Three-grid study comparing lift, moment and Cp with the reference
 - [ ] Optional point-vortex farfield correction
+- [ ] Run-configuration format, moved from Phase 4
 
 ### Phase 6 · Acceleration
 
@@ -283,7 +308,7 @@ Backlog after version 1: quadtree refinement, curved cut faces, a two-segment tr
 
 ## Open decisions
 
-Eight choices were open; two were settled on Oct 8 and are marked as decided. The recommendation for each open one is the default if nothing else is decided.
+Eight choices were open. Two were settled on Oct 8 and one on Oct 9, Phase 2 settled the trailing-edge tip, and the first airfoil case was proposed on Oct 10; each is marked. The recommendation for each open one is the default if nothing else is decided.
 
 | Decision | Recommendation | Needed by |
 | --- | --- | --- |
@@ -292,9 +317,9 @@ Eight choices were open; two were settled on Oct 8 and are marked as decided. Th
 | Version 1 background mesh: stretched tensor-product, or quadtree | **Decided (Oct 9): nested grids.** The body is cut on a uniform finest box, the only grid CutCellMethods' polyline clipping takes. The box is wrapped in CartesianMeshes `NestedGrids` levels out to the far field, each doubling the cell size, with hanging nodes where levels meet (`nested_cut_mesh`). Square cells keep the explicit local steps growing with the cells, which stretched cells would not. `AdaptiveMesh` stays the route to surface-following or solution-adaptive refinement after version 1, once the cutter handles tree leaves | Phase 2 |
 | Production flux: HLLC or Roe | HLLC; keep Rusanov for debugging | Phase 3 |
 | Is the P0 fallback acceptable, given state redistribution was ruled out | Yes, as an off-by-default safeguard | Phase 4 |
-| Trailing-edge tip: accept truncation, or two-segment wedge | Accept truncation in version 1 and report it | Phase 5 |
-| First airfoil case and reference data source | A NACA 0012 subsonic case with published Euler results | Phase 5 |
-| Implicit solver timing: after Phase 5, or earlier | After Phase 5, unless explicit convergence blocks airfoil grid studies | Phase 5 |
+| Trailing-edge tip: accept truncation, or two-segment wedge | **Settled by Phase 2:** the exact polyline cut keeps the polygon's own wall pieces in each fragment, so the tip is not truncated | Phase 5 |
+| First airfoil case and reference data source | **Proposed (Oct 10):** Vassberg and Jameson (2010), NACA 0012 at M 0.5, α 1.25°, on their sharp-trailing-edge geometry; FLO82 continuum Cl 0.180346, Cm -0.002269 | Phase 5 |
+| Implicit solver timing: after Phase 5, or earlier | After Phase 5, unless explicit convergence blocks airfoil grid studies. **Evidence (Oct 10):** iterations grow about 3x per refinement on the nested far field, and the 64-cell circle settles into a limit cycle, so the fine airfoil grids likely need it | Phase 5 |
 
 ## References
 

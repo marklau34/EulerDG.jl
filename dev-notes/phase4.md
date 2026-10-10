@@ -4,7 +4,8 @@ Companion to the plan's Phase 4 checklist. By decision on Oct 8, 2026, this phas
 resolution only: no implicit solver yet, and no high-resolution case without a fresh decision.
 Part 1 records the choices and findings, part 2 the gate results, and part 3 the decisions that
 were open after them. Part 4 is the full-resolution study of Oct 9, run against the restated gate,
-part 5 the decisions it leaves, and part 6 the nested far field built to settle the first of them.
+part 5 the decisions it leaves, part 6 the nested far field built to settle the first of them, and
+part 7 the closing.
 
 New code:
 
@@ -299,3 +300,70 @@ assumption; a 64-cell nested run would settle it.
 
 Not rerun on this mesh: the shift sweep (criterion 2b), whose problem is the circulation, not the
 far boundary.
+
+**The 64-cell nested run does not converge.** It was run on Oct 9 at CFL 3 (72,242 elements,
+7.5-12 ms per iteration) and stopped at the 1,000,000-iteration cap after 2.2 hours.
+
+| Iterations | 10k | 100k | 300k | 450k | 650k | 1000k |
+| --- | --- | --- | --- | --- | --- | --- |
+| Drag swing per window | 13.2 | 1.46 | 0.55 | 0.46 | 0.67 | 0.98 |
+| Residual | 0.38 | 0.11 | 0.060 | 0.045 | 0.078 | 0.158 |
+
+- **The cycle.** The drag swings by more than 13 at first. The swing decays to about 0.46 by
+  450,000 iterations, then grows again and saturates near 1.0, with the residual at about 0.16.
+- **Symmetric.** Lift stays below 6e-7, creeping up from round-off.
+- **CFL 3 is not the cause.** A CFL 2 run swung just as hard and decayed at the same rate per unit
+  of pseudo-time.
+- **The drag averaged over the cycle** stays within -0.0005 to +0.002. That is a cycle average, not
+  a steady value.
+- **The final state is one moment of the cycle.** Upstream of the circle Cp reads 1.31, 0.64 and
+  1.00 at 0.6, 0.8 and 1.0 diameters, against 0.91, 0.63 and 0.44 in steady potential flow. About
+  54% of the residual lies between 0.75 and 3.5 diameters from the centre: the finest box and the
+  first coarse-fine interface. About 40% lies beyond 8 diameters.
+- **What is different.** The uniform 6-radius grid at 64 cells per diameter has the same cell
+  lattice near the circle (both are aligned to its centre) and the same smallest fragment, 2.5e-4,
+  and it converged in 130,000 iterations. What differs is outside: the coarse-fine interfaces and
+  the distant far boundary.
+- **The working diagnosis.** At 64 cells per diameter the circle radiates short waves that the
+  coarser levels cannot carry. They are reflected at the 2:1 interfaces, the first only 1-3
+  diameters away, and trapped between the body and the interfaces. The close characteristic
+  boundary of the 6-radius grid absorbed them, and at 32 cells per diameter the scheme's own
+  dissipation damped them.
+
+The test is set W of `examples/circle_gate.jl`: the same nested far field with the finest box on
+[-3, 3]^2, as wide as the 6-radius grid, so the first interface is twice as far from the circle.
+
+**The wide box does not cure it.** 161,392 elements at 18 ms per iteration; stopped at 110,000
+iterations.
+
+| Window | 10k | 40k | 60k | 80k | 100k |
+| --- | --- | --- | --- | --- | --- |
+| Drag swing, wide box | 11.5 | 1.26 | 0.94 | 0.72 | 0.84 |
+| Drag swing, narrow box | 13.2 | 2.20 | 1.46 | 1.12 | 0.99 |
+| Drag swing, uniform 6 radii | 10.5 (5k) | 0.000 | | | |
+
+- The swing is about 40% lower than in the narrow box, but stops decaying near 0.8 by 80,000
+  iterations, with the residual near 0.04.
+- So the trapped reflections at the first interface are not the root cause.
+- The plain 6-radius grid sheds the start-up pulse within 10,000 iterations. The one thing it alone
+  has is a far boundary close to the body.
+- The likelier reading: on a large domain, the low dissipation of the 64-cell grid leaves a
+  symmetric global mode undamped, or unstable, under explicit pseudo-time. The close characteristic
+  boundary damps that mode.
+
+The open choices are damping in the coarse levels (a sponge toward the freestream far out, or a
+more dissipative flux there), or the implicit solver. A Newton-type method converges to the steady
+state whether or not pseudo-time settles into it.
+
+## 7. Closing (Oct 10)
+
+Phase 4 was closed by decision at 32 cells per diameter, on the nested far field. What holds and
+what does not is listed in the plan's Phase 4 section.
+
+Three items carry forward:
+
+- **The lift gate moves to Phase 5.** The airfoil's sharp trailing edge fixes the circulation; the
+  circle's is free.
+- **The 64-cell limit cycle goes to Phase 6.** It and the roughly 3x growth in iterations per
+  refinement are the case for the implicit solver.
+- **The run-configuration format** moves to Phase 5.

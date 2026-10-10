@@ -44,6 +44,20 @@
     @test throws_with(() -> naca4_points("012"; n=10), "needs 4 digits")
     @test throws_with(() -> naca4_points("2012"; n=10), "camber without its position")
 
+    # The extended trailing edge: Vassberg and Jameson's geometry, checked against their equations
+    # (4), (5) and (8): the edge at x = 1.0089304115 with slope 0.1418768821, and the thickness
+    # peaking at 0.1200345462 at x = 0.2998278780.
+    vj = naca4_points("0012"; n=2000, trailing_edge=:extended)
+    k = length(vj) ÷ 2
+    @test isapprox(vj[1][1], 1.0089304115; atol=1e-9) && vj[1][2] == 0     # printed to 10 digits
+    @test vj[k + 1] == PV(0, 0)
+    @test isapprox(-(vj[2][2] - vj[1][2]) / (vj[2][1] - vj[1][1]), 0.1418768821; rtol=1e-3)
+    upper = vj[2:k]
+    j = argmax(q -> q[2], upper)
+    @test isapprox(2j[2], 0.1200345462; atol=1e-6) && isapprox(j[1], 0.2998278780; atol=1e-3)
+    @test throws_with(() -> naca4_points("2412"; n=10, trailing_edge=:extended), "symmetric sections only")
+    @test throws_with(() -> naca4_points("0012"; n=10, trailing_edge=:blunt), "is :closed or :extended")
+
     # Grid shifts: (0, 0) first, then distinct offsets inside the cell.
     s = grid_shifts(32)
     @test s[1] == PV(0, 0) && length(unique(s)) == 32

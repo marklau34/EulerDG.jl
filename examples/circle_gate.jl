@@ -54,7 +54,13 @@ const GAPS = [(; tag=@sprintf("gap%.0e", g), shift=(0.0, 0.0), gap=g, nested=fal
 const SYMMETRIC = (; tag="sym", shift=(0.0, 0.0), gap=nothing, nested=false)
 # The nested far field (Oct 9): a finest box 1.5 diameters round the centre and 3.5 behind it,
 # wrapped in coarser levels out to 70 radii or more, 8 cells to a ring, aligned to the centre.
-const NESTED = (; tag="nested", shift=(0.0, 0.0), gap=nothing, nested=true)
+const NESTED = (; tag="nested", shift=(0.0, 0.0), gap=nothing, nested=true,
+                box=((-1.5, -1.5), (3.5, 1.5)))
+# The same with the finest box as wide as the 6-radius grid, [-3, 3]^2, so the first coarse-fine
+# interface is twice as far from the circle (Oct 9: at 64 cells per diameter the narrow box's
+# interfaces trapped an oscillation).
+const NESTED_WIDE = (; tag="nestedwide", shift=(0.0, 0.0), gap=nothing, nested=true,
+                     box=((-3.0, -3.0), (3.0, 3.0)))
 
 run_key(cpd, L, p) = "d$(cpd)_L$(L)_$(p.tag)"
 
@@ -63,12 +69,13 @@ function runs(set)
     set == "B" && return [(cpd, 3, SYMMETRIC) for cpd in (8, 16, 32, 64)]
     set == "C" && return [(cpd, 3, p) for cpd in (8, 16, 32) for p in vcat(SHIFTS, GAPS)]
     set == "N" && return [(cpd, 35, NESTED) for cpd in (8, 16, 32, 64)]
-    error("unknown set $set; use A, B, C, N or summary")
+    set == "W" && return [(cpd, 35, NESTED_WIDE) for cpd in (8, 16, 32, 64)]
+    error("unknown set $set; use A, B, C, N, W or summary")
 end
 
 # The mesh and discretization, and the circle's centre.
 function setup(cpd, L, p)
-    p.nested && return setup_nested(cpd, L)
+    p.nested && return setup_nested(cpd, L, p.box)
     n = round(Int, 2L * cpd)
     g = CartesianGrid(Float64; mincorner=(-L, -L), maxcorner=(L, L), n=(n, n))
     pts = circle_points(; radius=0.5, h=minimum(g.d))
@@ -79,8 +86,9 @@ function setup(cpd, L, p)
     return discretize(cut, c)
 end
 
-function setup_nested(cpd, L)
-    g = CartesianGrid(Float64; mincorner=(-1.5, -1.5), maxcorner=(3.5, 1.5), n=(5cpd, 3cpd))
+function setup_nested(cpd, L, (lo, hi))
+    n = round.(Int, (hi .- lo) .* cpd)
+    g = CartesianGrid(Float64; mincorner=lo, maxcorner=hi, n=Tuple(n))
     body = polygon_body(circle_points(; radius=0.5, h=minimum(g.d)); name="circle")
     cut = nested_cut_mesh(g, body; farfield=((-L, -L), (L, L)), buffer=8, origin=(0.0, 0.0))
     return discretize(cut, PV(0, 0))
@@ -126,14 +134,14 @@ function run_case(cpd, L, p)
     log = RunLog(joinpath(OUT, key * "_run.csv"), semi, UINF; every=100, point=Tuple(s.center))
     # The nested far field converges more slowly: allow it more iterations.
     maxiter = p.nested ? 1_000_000 : 400_000
-    seconds = @elapsed r = solve_steady!(u, semi; tol=1e-10, maxiter,
+    seconds = @elapsed r = solve_steady!(u, semi; tol=1e-10, maxiter, cfl=CFL[],
                                          callback=Progress(log, key, 10_000, time()))
     close(log)
-    record = (; key, cpd, L, radii=2L, tag=p.tag, elements=nelements(semi.mesh), minvf=s.minvf,
+    record = (; key, cpd, L, radii=2L, tag=p.tag, cfl=CFL[], elements=nelements(semi.mesh), minvf=s.minvf,
               converged=r.converged, iterations=r.iterations, residual=r.residual, seconds,
               metrics(semi, u, s.center)...)
     serialize(file, (; record, u))
-    p.tag in ("sym", "nested") && write_solution_vtk(joinpath(OUT, key), semi, u; freestream=UINF)
+    p.tag in ("sym", "nested", "nestedwide") && write_solution_vtk(joinpath(OUT, key), semi, u; freestream=UINF)
     @printf("  %s: %s after %d iterations, %.0f s; cl %+.2e, cd %.3e, stagnation Cp %.4f\n", key,
             r.converged ? "converged" : "NOT CONVERGED", r.iterations, seconds, record.cl, record.cd,
             record.cp_front)
@@ -237,6 +245,7 @@ function summary()
     A = filter(!isnothing, [find(8, L, "sym") for L in (3, 4, 6, 12)])
     B = filter(!isnothing, [find(cpd, 3, "sym") for cpd in (8, 16, 32, 64)])
     N = filter(!isnothing, [find(cpd, 35, "nested") for cpd in (8, 16, 32, 64)])
+    W = filter(!isnothing, [find(cpd, 35, "nestedwide") for cpd in (8, 16, 32, 64)])
     if length(A) == 4
         c6, c12, c24 = A[1].cp_front, A[3].cp_front, A[4].cp_front
         p = order(c6 - c12, c12 - c24)
@@ -259,9 +268,17 @@ function summary()
     end
 
     for (title, S) in (("B. Order study at 6 radii:", B),
-                       ("N. Order study on the nested far field, 70 radii or more:", N))
-        length(S) >= 2 || continue
+                       ("N. Order study on the nested far field, 70 radii or more:", N),
+                       ("W. The nested far field with the finest box on [-3, 3]^2:", W))
+        # A run that did not converge has no steady state to compare: listed, but left out.
+        unconverged = filter(r -> !r.converged, S)
+        S = filter(r -> r.converged, S)
+        isempty(S) && isempty(unconverged) && continue
         println("\n", title)
+        for r in unconverged
+            @printf("  %2d cells/D did not converge (%d iterations, residual %.1e): left out\n",
+                    r.cpd, r.iterations, r.residual)
+        end
         for (k, r) in enumerate(S)
             @printf("  %2d cells/D: cl %+.1e, asym tb %.1e, asym fa %.2e, cd %.3e, entropy %.3e, wake %.3e, Cp front %.4f",
                     r.cpd, r.cl, r.asym_tb, r.asym_fa, r.cd, r.entropy_l2, r.wake, r.cp_front)
@@ -289,8 +306,14 @@ end
 # =====================================
 
 # Numbers among the arguments pick the cells per diameter to run: `N 8 16 32` skips N's 64.
-cpds = [parse(Int, a) for a in ARGS if all(isdigit, a)]
-setnames = uppercase.(filter(a -> !all(isdigit, a), ARGS))
+# `cfl=x` sets the CFL number, the solver's default otherwise.
+const CFL = Ref(3.0)
+for a in ARGS
+    startswith(a, "cfl=") && (CFL[] = parse(Float64, a[5:end]))
+end
+args = filter(a -> !startswith(a, "cfl="), ARGS)
+cpds = [parse(Int, a) for a in args if all(isdigit, a)]
+setnames = uppercase.(filter(a -> !all(isdigit, a), args))
 sets = isempty(setnames) ? ["A", "B", "C"] : setnames
 @printf("%d threads; output in %s\n", Threads.nthreads(), OUT)
 for set in filter(!=("SUMMARY"), sets)

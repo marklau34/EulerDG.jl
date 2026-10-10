@@ -106,43 +106,55 @@ end
 
 """
     naca4_points(digits="0012"; n=nothing, h=nothing, per_cell=4, chord=1, le=(0, 0),
-                 alpha_deg=0) -> Vector{SVector{2}}
+                 alpha_deg=0, trailing_edge=:closed) -> Vector{SVector{2}}
 
-A NACA 4-digit section with a sharp trailing edge (the thickness coefficient -0.1036 closes it),
-as a counter-clockwise polygon from the trailing edge along the upper surface, round the leading
-edge and back along the lower surface.
+A NACA 4-digit section with a sharp trailing edge, as a counter-clockwise polygon from the
+trailing edge along the upper surface, round the leading edge and back along the lower surface.
+The standard section has a blunt base 0.25% of the chord thick at x = 1; `trailing_edge` says how
+it is made sharp:
 
-Each surface has `n` segments with half-cosine spacing, `x = 1 - cos(π j / 2n)`: clustered at the
-leading edge, where the curvature is, and widest at the trailing edge, where the section is
+- `:closed` -- the thickness coefficient -0.1036 instead of -0.1015 closes it at x = 1;
+- `:extended` -- the standard thickness, its chord extended to where it closes, at
+  x = 1.0089304115: the geometry of Vassberg and Jameson's grid-convergence study (J. Aircraft,
+  2010), whose reference chord stays 1. Symmetric sections only.
+
+Each surface has `n` segments with half-cosine spacing, `x = x_te (1 - cos(π j / 2n))`: clustered
+at the leading edge, where the curvature is, and widest at the trailing edge, where the section is
 nearly straight. Clustering there too would pile tiny wall faces into the trailing-edge cell. Give
 `n`, or the cell size `h` for segments no longer than `h / per_cell` anywhere. The leading edge is
 at `le`, and the section is turned nose-up by `alpha_deg` about it.
 """
 function naca4_points(digits::AbstractString="0012"; n=nothing, h=nothing, per_cell=4,
-                      chord=1.0, le=(0.0, 0.0), alpha_deg=0.0)
+                      chord=1.0, le=(0.0, 0.0), alpha_deg=0.0, trailing_edge::Symbol=:closed)
     (length(digits) == 4 && all(isdigit, digits)) ||
         throw(ArgumentError("a NACA 4-digit section needs 4 digits, not \"$digits\""))
     m = parse(Int, digits[1]) / 100
     p = parse(Int, digits[2]) / 10
     t = parse(Int, digits[3:4]) / 100
     (m == 0) == (p == 0) || throw(ArgumentError("NACA $digits has camber without its position"))
-    yt(x) = 5t * (0.2969sqrt(x) - 0.1260x - 0.3516x^2 + 0.2843x^3 - 0.1036x^4)
+    trailing_edge in (:closed, :extended) ||
+        throw(ArgumentError("trailing_edge is :closed or :extended, not :$trailing_edge"))
+    trailing_edge == :extended && m != 0 &&
+        throw(ArgumentError("the extended trailing edge is defined for symmetric sections only"))
+    a4 = trailing_edge == :closed ? -0.1036 : -0.1015
+    yt(x) = 5t * (0.2969sqrt(x) - 0.1260x - 0.3516x^2 + 0.2843x^3 + a4 * x^4)
+    xte = trailing_edge == :closed ? 1.0 : _thickness_root(a4)
     yc(x) = m == 0 ? 0.0 : x < p ? m / p^2 * (2p * x - x^2) : m / (1 - p)^2 * ((1 - 2p) + 2p * x - x^2)
     dyc(x) = m == 0 ? 0.0 : x < p ? 2m / p^2 * (p - x) : 2m / (1 - p)^2 * (p - x)
     surface(x, s) = (θ = atan(dyc(x)); PV(x - s * yt(x) * sin(θ), yc(x) + s * yt(x) * cos(θ)))
     α = deg2rad(alpha_deg)
     R(q) = PV(cos(α) * q[1] + sin(α) * q[2], -sin(α) * q[1] + cos(α) * q[2])
     function section(k)
-        xs = [1 - cospi(j / 2k) for j in 0:k]
+        xs = [xte * (1 - cospi(j / 2k)) for j in 0:k]
         upper = [surface(x, 1) for x in reverse(xs)]
         lower = [surface(x, -1) for x in xs[2:(end - 1)]]
-        # The trailing edge is one point: yt(1) is zero to round-off.
-        upper[1] = PV(1, yc(1.0))
+        # The trailing edge is one point: yt(xte) is zero to round-off.
+        upper[1] = PV(xte, yc(xte))
         return [PV(le) + chord * R(q) for q in vcat(upper, lower)]
     end
-    # The widest spacing in x is π/(2k) chords, at the trailing edge. The surface slopes there, so
-    # the segments are a little longer: grow k until they fit.
-    k = _segments(π * chord / 2, n, h, per_cell)
+    # The widest spacing in x is π x_te/(2k) chords, at the trailing edge. The surface slopes there,
+    # so the segments are a little longer: grow k until they fit.
+    k = _segments(π * xte * chord / 2, n, h, per_cell)
     pts = section(k)
     while n === nothing && (w = _widest(pts)) > h / per_cell
         k = ceil(Int, k * w * per_cell / h)
@@ -152,6 +164,20 @@ function naca4_points(digits::AbstractString="0012"; n=nothing, h=nothing, per_c
 end
 
 _widest(pts) = maximum(hypot((pts[mod1(j + 1, length(pts))] - pts[j])...) for j in eachindex(pts))
+
+# Where the NACA thickness with last coefficient `a4` closes beyond x = 1, by Newton's method from
+# x = 1: 1.0089304115 for the standard -0.1015.
+function _thickness_root(a4)
+    f(x) = 0.2969sqrt(x) - 0.1260x - 0.3516x^2 + 0.2843x^3 + a4 * x^4
+    df(x) = 0.2969 / (2sqrt(x)) - 0.1260 - 0.7032x + 0.8529x^2 + 4a4 * x^3
+    x = 1.0
+    for _ in 1:50
+        dx = f(x) / df(x)
+        x -= dx
+        abs(dx) <= 4eps(x) && break
+    end
+    return x
+end
 
 """
     grid_shifts(n) -> Vector{SVector{2,Float64}}
