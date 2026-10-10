@@ -1,21 +1,21 @@
 # Cut-Cell DG Euler Solver — Architecture & Development Plan
 
-Oct 8, 2026 · @Mark
+Oct 8, 2026 · @Mark · updated Oct 10 to match the code through Phase 5
 
 ## Scope and assumptions
 
-Version 1 delivers a converged, steady, subsonic 2D airfoil solution from a P1 modal DG discretization on a Cartesian cut-cell mesh, with local pseudo-time stepping in place of state redistribution.
+Version 1 delivers a converged, steady, subsonic 2D airfoil solution from a P1 modal DG discretization on a Cartesian cut-cell mesh, with local pseudo-time stepping in place of state redistribution. That goal was met in Phase 5. Phase 6 makes it fast, with an implicit pseudo-transient solver.
 
 | Item | Version 1 choice |
 | --- | --- |
 | Equations | 2D compressible Euler, steady only, subsonic (local Mach < 1) |
 | Discretization | Modal DG, P = 1 on every element |
 | Geometry | Closed polygons (SDFLibrary `SDFMesh`), cut exactly by CutCellMethods; a fragment's wall is the polygon's own pieces in the cell (Phase 2) |
-| Background mesh | Static uniform Cartesian grid (CartesianMeshes' `CartesianGrid`); stretching deferred (Oct 8); no AMR |
-| Small cells | Local time stepping only; no state redistribution, no merging |
-| Runtime | Julia, CPU, FP64 (assumed; see Open decisions) |
+| Background mesh | Static nested Cartesian grids (Oct 9): the body is cut on a uniform finest box (CartesianMeshes' `CartesianGrid`), wrapped in coarser `NestedGrids` levels out to the far field, with hanging nodes where levels meet; no AMR |
+| Small cells | Local time stepping; fragments below 1e-12 of a cell are dropped; no state redistribution, no merging |
+| Runtime | Julia, CPU, FP64, threaded with KernelAbstractions kernels (Oct 9) |
 
-Out of scope for version 1: shocks and limiting, curved cut faces, AMR, 3D, GPU and implicit solvers. The architecture keeps a clean path to each of them.
+Out of scope for version 1: shocks and limiting, curved cut faces, AMR, 3D and GPU. The architecture keeps a clean path to each of them. Implicit solvers were out of scope too, but Phase 6 brings one into version 1.
 
 Assumed reuse: the SDF geometry library, the earlier cut-cell preprocessing code, and Trixi.jl's equation and flux layer and code organization.
 
@@ -31,11 +31,13 @@ Local time stepping does not fix three things, each handled separately:
 
 - **Mass-matrix conditioning on slivers.** Handled by the per-element basis (decision 3).
 - **Weakly controlled gradient modes on slivers.** Handled by an optional P0 fallback (decision 4).
-- **Global stiffness of explicit P1 DG.** Accepted in version 1; an implicit solver is the planned cure.
+- **Global stiffness of explicit P1 DG.** Accepted through Phase 5; the implicit solver of Phase 6 is the cure. The evidence for needing it:
+  - Iterations grow 1.2–3x per refinement: 502,000 for the airfoil at 128 cells per chord.
+  - The 64-cell circle on the nested far field settles into a limit cycle instead of a steady state.
 
 ### 2. A polygon-DG core; Cartesian structure lives only in the preprocessor
 
-After preprocessing, the solver sees a general mesh of polygonal elements and faces. Full cells and cut fragments run through one code path. Several fragments in one background cell need no special case. A later quadtree adds hanging nodes as extra faces on a polygon, so no mortars are needed. The cost is losing tensor-product sum factorization, which is negligible at P1.
+After preprocessing, the solver sees a general mesh of polygonal elements and faces. Full cells and cut fragments run through one code path. Several fragments in one background cell need no special case. Hanging nodes are extra faces on a polygon, so no mortars are needed; the nested far field (Oct 9) already uses them, and a later quadtree would too. The cost is losing tensor-product sum factorization, which is negligible at P1.
 
 This also means Trixi's DGSEM kernels are not reused. They rely on tensor-product LGL nodes with summation-by-parts, which cut cells break. The solver uses the standard weak-form modal DG with explicit quadrature. It borrows Trixi's equation and flux functions and its container layout.
 
@@ -50,7 +52,13 @@ Each element starts from 1, (x − xc)/hx and (y − yc)/hy on its own bounding 
 3. Drop to P0 on fragments below a volume-fraction threshold (off by default).
 4. Treat fragments below round-off size, around 1e-12 of a full cell, as solid. The conservation error is negligible.
 
-Merging stays in reserve and is not planned. The grid-shift sweep in Phase 4 decides whether rungs 2 and 3 are ever needed.
+Merging stays in reserve and is not planned.
+
+**Status (Oct 10).**
+
+- Rung 4 is built: `drop_area`, 1e-12 of a cell by default.
+- Rungs 2 and 3 are not built. Every sweep converged without them: slivers to 1e-12 on the circle and on tilted walls, and the airfoil to 1.8e-5 at 128 cells per chord.
+- They wait until a case needs them.
 
 ## Software architecture
 
@@ -81,7 +89,7 @@ The preprocessor's job is to hand the solver a watertight polygon mesh; the exis
 
 - Every fluid fragment of a background cell becomes its own element.
 - Each partial edge between two fluid fragments is one face, with split points computed once and shared bitwise by both sides.
-- Wall crossings on cell edges come from a root-find on the SDF along the edge.
+- Wall crossings on cell edges come from exact intersection of the body's polygon with the edge (Phase 2), not a root-find on the SDF.
 - All lengths, normals and areas derive from one vertex list per element. Then the face vectors of every element sum to zero at round-off.
 - That closure property is what makes uniform flow along a straight wall preserved exactly. Check it in the report on every run.
 
@@ -91,7 +99,7 @@ The trailing edge is where a cut-cell airfoil usually goes wrong, and the errors
 
 - **Lost features.** Where the airfoil is thinner than a cell, every vertex can sit in fluid while the body passes through. Vertex-based classification then misses the body and the flow leaks across the trailing edge. Flag any cell whose center SDF value is below its half-diagonal while all vertices share a sign. The preprocessor stops with an error on these rather than continuing; the fix is local refinement.
 - **Split cells.** A cell straddling the trailing edge holds an upper and a lower fragment with a solid sliver between. These must be two elements with no face between them.
-- **Truncated tip.** One straight segment per fragment cuts the sharp tip off and leaves a blunt base about one cell wide. Version 1 may accept this, but the report should list it. The option for later is a two-segment wedge wall in the tip cell, which makes that fragment nonconvex.
+- **Truncated tip.** One straight segment per fragment would cut the sharp tip off, leaving a blunt base about one cell wide. **Not an issue here:** the exact polygon cut keeps the polygon's own wall pieces in each fragment, so the tip cell is a nonconvex fragment with the exact edge as a vertex. Phase 5's trailing-edge reports confirm it on every grid.
 
 The Kutta condition needs no explicit enforcement in an Euler solver. Numerical dissipation at a sharp, non-leaking trailing edge sets the circulation.
 
@@ -106,12 +114,12 @@ The discretization is the standard weak form, evaluated by explicit quadrature o
 | Component | Choice | Notes |
 | --- | --- | --- |
 | Basis | 3 modes per variable, built per element (Core decision 3) | State array sized 4 × 3 × elements, Trixi-style |
-| Volume quadrature | Ear-clipping triangulation, 3-point degree-2 rule per triangle | Ear clipping also covers the nonconvex trailing-edge wedge; a 6-point rule for over-integration is a switch |
-| Full-cell quadrature | Tensor 2 × 2 Gauss, shared reference data | Same kernel as cut cells |
+| Volume quadrature | Ear-clipping triangulation, 3-point degree-2 rule per triangle (`volume_degree=2`, the default) | Ear clipping also covers the nonconvex trailing-edge wedge. The circle and airfoil studies use the 6-point degree-4 rule (`volume_degree=4`): it removes the ear-clipping asymmetry of mirrored fragments (Phase 4) |
+| Full-cell quadrature | Tensor 2 × 2 Gauss on every rectangle, hanging nodes included (`box_degree=3`, Oct 9) | Same kernel as cut cells; 3 × 3 is `box_degree=5`, which changed the circle's results only past their fifth digit |
 | Face quadrature | 2-point Gauss per segment | Normals stored per quadrature point so curved faces drop in later |
-| Interior flux | Rusanov for debugging; HLLC or Roe for production | Fluxes are plain functions of (uL, uR, n), as in Trixi |
+| Interior flux | HLLC for production, Rusanov for debugging (Phase 3) | Fluxes are plain functions of (uL, uR, n), as in Trixi |
 | Slip wall | Mirror state through the same Riemann flux | Pressure-only wall flux kept as an alternative to compare |
-| Farfield | Characteristic (Riemann-invariant) state | Boundary at 50–100 chords via stretching; point-vortex correction later |
+| Farfield | Characteristic (Riemann-invariant) state | Boundary at 100 chords or more via the nested far field (Oct 9); point-vortex correction not yet built |
 | Limiting | None for subsonic flow | Positivity check at quadrature points aborts with the element id |
 
 Straight cut faces are consistent with second-order accuracy at P1. They still produce spurious entropy at the wall, so entropy error is tracked from the first airfoil run. Bassi and Rebay showed boundary representation dominates DG accuracy at higher order, which is why curved faces are on the backlog.
@@ -132,7 +140,7 @@ The face sum includes wall faces. A thin sliver along a long wall face therefore
 - Fold the steps into the right-hand side: integrate dU/dτ = −D M⁻¹ R(U) with D = diag(Δt\_K) and dτ = 1. Any fixed-step integrator then works unchanged, including DifferentialEquations.jl.
 - Hand-roll SSP-RK3 or a low-storage scheme in version 1. It is about 20 lines and keeps full control of stages and monitoring.
 - Start from freestream with a CFL ramp from about 0.1 to the target over the first few hundred iterations.
-- Optional startup: converge P0 first, then lift to P1. This also prototypes a P1-to-P0 multigrid.
+- Optional startup: converge P0 first, then lift to P1. This also prototypes a P1-to-P0 multigrid. Not built.
 
 ### Convergence monitoring
 
@@ -140,6 +148,8 @@ The face sum includes wall faces. A thin sliver along a long wall face therefore
 - Maximum residual over elements and the element that holds it. A stuck small cell shows here first.
 - Lift, drag and moment histories.
 - Stop at 10 orders of residual drop, or a force plateau to 1e-6 over 1,000 iterations.
+  - Only the residual stop is built.
+  - The force-plateau stop is still to do. It would have ended the shifted circle runs and the 64-cell runs long before their residual, once their lift had settled.
 
 ### Acceleration path
 
@@ -151,18 +161,18 @@ For a subsonic inviscid airfoil, entropy error and spurious drag are the primary
 
 | Output | How | Used for |
 | --- | --- | --- |
-| Lift, drag, moment | Integrate p n over wall faces at their quadrature points, using the interior trace | Convergence and validation |
+| Lift, drag, moment | Integrate p n over wall faces at their quadrature points, using the interior trace; the pitching moment nose-up positive (Oct 10) | Convergence and validation |
 | Surface Cp | Values at wall quadrature points, sorted by x/c | Comparison with reference Cp |
 | Entropy error | (s − s∞)/s∞ field and its domain L2 norm | Primary accuracy metric; should fall at about second order |
 | Spurious drag | Drag coefficient, exactly zero in the continuous problem | Second accuracy metric |
-| Field output | Each element written as a VTK polygon with P1 values at its vertices, plus cell averages | Visual checks of cut cells |
+| Field output | Each element written as a VTK polygon with its cell averages; P1 values at its vertices still to do | Visual checks of cut cells |
 | Run log | Residual and force history per iteration, CSV | Convergence plots |
 
 Cut-cell surface Cp is naturally scattered from cell to cell. Plotting per quadrature point shows that scatter honestly, which is itself a quality check.
 
 ## Development plan
 
-Seven phases take the solver from an uncut DG core to a validated subsonic airfoil and then to fast convergence; no phase starts until the previous gate passes.
+Seven phases take the solver from an uncut DG core to a validated subsonic airfoil and then to fast convergence; no phase starts until the previous gate passes. Phases 4 and 5 were closed by decision on Oct 10, with their open items recorded in each section.
 
 &#91;embedded content: development roadmap · 7 phases, each with a gate\]
 
@@ -296,7 +306,7 @@ Checklist:
 - [x] Forces, Cp, entropy and VTK output: `examples/naca0012_flow.jl` (Oct 9)
 - [x] Three-grid study comparing lift, moment and Cp with the reference: `examples/naca0012_study.jl`
 - [ ] Optional point-vortex farfield correction: not done
-- [ ] Run-configuration format, moved from Phase 4: not done
+- [ ] Run-configuration format, moved from Phase 4: moved to the backlog (Oct 10), since keyword arguments have served every study
 
 **Closed (Oct 10), by decision, on 32, 64 and 128 cells per chord.**
 
@@ -318,26 +328,47 @@ Checklist:
 - [ ] Backward-Euler pseudo-transient continuation with local steps and switched evolution relaxation
 - [ ] Block-Jacobi, then ILU-preconditioned GMRES
 
-Backlog after version 1: quadtree refinement, curved cut faces, a two-segment trailing-edge wedge, a low-Mach flux fix, transonic shock capturing, 3D and GPU.
+**Gate (proposed Oct 10).**
+
+- **The same answers, fast.** The airfoil at 128 cells per chord converges 10 orders in a few hundred nonlinear iterations, against 502,000 explicit steps. Its forces agree with the explicit run to about 1e-8.
+- **Where explicit fails.** The circle at 64 cells per diameter on the nested far field reaches a steady state, where the explicit solve settles into a limit cycle.
+- **What becomes affordable.** The airfoil at 256 cells per chord, to confirm the asymptotic order and bring lift within 1% of the reference.
+
+**Version 1 loose ends**, to finish alongside:
+
+- [ ] The force-plateau stopping criterion, from the convergence-monitoring section
+- [ ] P1 values at the vertices in the VTK output, from the postprocessing table
+- [ ] The point-vortex farfield correction, carried from Phase 5: optional, worth about 0.5% in lift at 100 chords
+
+**Backlog after version 1**, roughly in order of value:
+
+- **Local refinement near the leading and trailing edges.** The trailing-edge singularity converges at first order, and the uniform finest box spends most cells where they are not needed. It needs CartesianMeshes' `AdaptiveMesh`, or several finest patches, and the polyline cutter extended to their cells.
+- **Transonic flow.** Vassberg and Jameson's M 0.8, 1.25° case is the next benchmark, with shock capturing (Persson and Peraire) and a low-Mach flux fix.
+- **Higher order, P2 and up, with curved cut faces.** Curved faces matter most at higher order (Bassi and Rebay).
+- **GPU.** The kernels are KernelAbstractions already; the solver data needs Adapt, and the cutter stays on the host.
+- **3D.**
+- **The run-configuration format**, moved here from Phase 5.
+
+The two-segment trailing-edge wedge is no longer needed: the exact cut keeps the tip.
 
 ## Open decisions
 
-Eight choices were open. Two were settled on Oct 8, one on Oct 9 and one on Oct 10, and Phase 2 settled the trailing-edge tip; each is marked. The recommendation for each open one is the default if nothing else is decided.
+Eight choices were open; all are now settled. Four were decided: the two on Oct 8, the background mesh on Oct 9 and the first airfoil case on Oct 10. The other four were settled by what the phases built, the implicit solver's timing following the recommendation.
 
 | Decision | Recommendation | Needed by |
 | --- | --- | --- |
-| Runtime: CPU FP64 only, or GPU kernels from the start | CPU FP64 first; face-loop layout kept GPU-friendly | Phase 0 |
+| Runtime: CPU FP64 only, or GPU kernels from the start | **Settled (Oct 9):** CPU FP64, threaded with KernelAbstractions kernels, which keep the GPU path open | Phase 0 |
 | Trixi.jl as a dependency, or copy its equation and flux functions | **Decided (Oct 8): copy.** Trixi 0.17.13 adds 2.5 s to every load and a 228-package tree, for about eight functions | Phase 0 |
 | Version 1 background mesh: stretched tensor-product, or quadtree | **Decided (Oct 9): nested grids.** The body is cut on a uniform finest box, the only grid CutCellMethods' polyline clipping takes. The box is wrapped in CartesianMeshes `NestedGrids` levels out to the far field, each doubling the cell size, with hanging nodes where levels meet (`nested_cut_mesh`). Square cells keep the explicit local steps growing with the cells, which stretched cells would not. `AdaptiveMesh` stays the route to surface-following or solution-adaptive refinement after version 1, once the cutter handles tree leaves | Phase 2 |
-| Production flux: HLLC or Roe | HLLC; keep Rusanov for debugging | Phase 3 |
-| Is the P0 fallback acceptable, given state redistribution was ruled out | Yes, as an off-by-default safeguard | Phase 4 |
+| Production flux: HLLC or Roe | **Settled by Phase 3:** HLLC, with Rusanov for debugging | Phase 3 |
+| Is the P0 fallback acceptable, given state redistribution was ruled out | Yes, as an off-by-default safeguard. **Not built (Oct 10):** no case has needed it | Phase 4 |
 | Trailing-edge tip: accept truncation, or two-segment wedge | **Settled by Phase 2:** the exact polyline cut keeps the polygon's own wall pieces in each fragment, so the tip is not truncated | Phase 5 |
 | First airfoil case and reference data source | **Decided (Oct 10):** Vassberg and Jameson (2010), NACA 0012 at M 0.5, α 1.25°, on their sharp-trailing-edge geometry; FLO82 continuum Cl 0.180346, Cm -0.002269 | Phase 5 |
-| Implicit solver timing: after Phase 5, or earlier | After Phase 5, unless explicit convergence blocks airfoil grid studies. **Evidence (Oct 10):** iterations grow about 3x per refinement on the nested far field, and the 64-cell circle settles into a limit cycle, so the fine airfoil grids likely need it | Phase 5 |
+| Implicit solver timing: after Phase 5, or earlier | **Settled (Oct 10): Phase 6 follows Phase 5, as recommended.** Explicit convergence held for the airfoil to 128 cells per chord (502,000 iterations), but iterations grow 1.2–3x per refinement, and the 64-cell circle settles into a limit cycle | Phase 5 |
 
 ## References
 
-These are cited from memory without a database check, so verify titles, venues and years before relying on them.
+These are cited from memory without a database check, so verify titles, venues and years before relying on them; only Vassberg and Jameson has been checked.
 
 - Bassi and Rebay, high-order DG for the 2D Euler equations and the role of curved boundaries, J. Comput. Phys., 1997.
 - Fidkowski and Darmofal, triangular cut-cell adaptive method for high-order DG with implicit steady solves, J. Comput. Phys., 2007.
@@ -345,4 +376,5 @@ These are cited from memory without a database check, so verify titles, venues a
 - Engwer, May, Nüßing and Streitbürger, domain-of-dependence stabilization for DG on cut-cell meshes, SIAM J. Sci. Comput., 2020.
 - Berger and Giuliani, state redistribution for cut cells, J. Comput. Phys., 2021.
 - Ranocha et al., Trixi.jl adaptive high-order solvers in Julia, JuliaCon Proceedings, 2022.
+- Vassberg and Jameson, In pursuit of grid convergence for two-dimensional Euler solutions, J. Aircraft 47(4), 2010, doi:10.2514/1.46737 (checked Oct 10: the Phase 5 reference).
 - Persson and Peraire, sub-cell shock capturing for DG, AIAA paper, 2006 (for the transonic backlog).
